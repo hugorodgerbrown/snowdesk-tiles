@@ -1,0 +1,57 @@
+# Caddyfile — range-capable static origin for the self-hosted OpenFreeMap
+# basemap (SNOW-485), served at https://tiles.snowdesk.info/.
+#
+# Serves four asset classes off the mounted persistent disk (/data):
+#   /styles/liberty          rewritten Liberty style JSON  (see rewrite_style.py)
+#   /sprites/*               ofm.json / ofm.png (+ @2x)
+#   /fonts/{stack}/{range}   Noto Sans glyph PBFs
+#   /*.pmtiles               the OpenMapTiles-schema vector-tile archive
+#
+# Caddy's file_server answers Range requests natively (206 + Accept-Ranges),
+# which is the hard requirement for the client-side PMTiles reader. CORS is
+# scoped to the site origins so SNOW-484's service worker can validate the
+# cross-origin responses. Compression is deliberately restricted to text
+# (style/sprite JSON) — never the PMTiles or PBFs, because gzip over a Range
+# response corrupts the byte windows MapLibre asks for.
+
+{
+	admin off
+	persist_config off
+}
+
+:{$PORT} {
+	root * /data
+	log
+
+	# Render health check target — set the service's health-check path to
+	# /healthz so it does not probe the disk root (which 404s).
+	@healthz path /healthz
+	respond @healthz "ok" 200
+
+	# CORS — echo the Origin only for the known site origins. Range is the
+	# request header MapLibre adds; Content-Range/Accept-Ranges must be
+	# exposed so the reader can see the 206 metadata cross-origin.
+	@allowed_origin header Origin https://snowdesk.info https://snowdesk-staging.onrender.com
+	header @allowed_origin {
+		Access-Control-Allow-Origin "{http.request.header.Origin}"
+		Access-Control-Allow-Methods "GET, HEAD, OPTIONS"
+		Access-Control-Allow-Headers "Range"
+		Access-Control-Expose-Headers "Content-Range, Accept-Ranges, Content-Length"
+		Access-Control-Max-Age "86400"
+		Vary Origin
+	}
+
+	# CORS preflight — answer OPTIONS before file_server sees it.
+	@preflight method OPTIONS
+	respond @preflight 204
+
+	# Monthly snapshots are immutable — cache them hard.
+	@immutable path *.pmtiles /sprites/* /fonts/*
+	header @immutable Cache-Control "public, max-age=31536000, immutable"
+
+	# Compress text only. Never the PMTiles/PBFs (breaks Range).
+	@text path /styles/* *.json
+	encode @text gzip zstd
+
+	file_server
+}

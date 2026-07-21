@@ -1,0 +1,10 @@
+# Built map assets — never commit these; they live on the Render disk.
+/data/
+*.pmtiles
+styles/
+sprites/
+fonts/
+
+# Local planetiler working files
+*.osm.pbf
+planetiler.jar
