@@ -4,39 +4,49 @@
 SNOW-485. The public Liberty style at ``tiles.openfreemap.org`` references its
 own host in three places — the vector ``sources`` URL, the ``sprite`` base, and
 the ``glyphs`` template. Self-hosting means serving a copy of that style whose
-internal URLs point back at ``tiles.snowdesk.info`` instead, and whose vector
+internal URLs point back at ``tiles.snowdesk-data.info`` instead, and whose vector
 source reads the local PMTiles archive via the client-side ``pmtiles://``
 protocol rather than the OpenFreeMap tile server.
 
 Standalone operational tooling: stdlib only, no Django. Run it when building or
-refreshing the disk contents; write the output to ``/data/styles/liberty``.
+refreshing the published assets; write the output to ``dist/styles/liberty``.
 
-Usage (ORIGIN = https://tiles.snowdesk.info):
-    python rewrite_style.py --origin ORIGIN --pmtiles alps.pmtiles > liberty
+Usage (ORIGIN = https://tiles.snowdesk-data.info):
+    python scripts/rewrite_style.py --origin ORIGIN --pmtiles alps.pmtiles \
+        > dist/styles/liberty
 
     # Rewrite a local copy instead of fetching the upstream style:
-    python rewrite_style.py --source ./liberty.json --origin ORIGIN --pmtiles ...
+    python scripts/rewrite_style.py --source ./liberty.json --origin ORIGIN ...
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import urllib.request
 from typing import Any
 
-UPSTREAM_STYLE_URL = "https://tiles.openfreemap.org/styles/liberty"
-UPSTREAM_ORIGIN = "https://tiles.openfreemap.org"
+UPSTREAM_ORIGIN = os.environ.get("UPSTREAM_ORIGIN", "https://tiles.openfreemap.org")
+UPSTREAM_STYLE_URL = os.environ.get(
+    "UPSTREAM_STYLE_URL", f"{UPSTREAM_ORIGIN}/styles/liberty"
+)
 
 
 def load_style(source: str) -> dict[str, Any]:
     """Return the style JSON, fetched over HTTP or read from a local path."""
     if source.startswith(("http://", "https://")):
-        with urllib.request.urlopen(source) as response:  # noqa: S310 - trusted URL
-            return json.loads(response.read().decode("utf-8"))
+        # OpenFreeMap rejects requests with no User-Agent (403), so send one.
+        request = urllib.request.Request(  # noqa: S310 - scheme checked above
+            source, headers={"User-Agent": "snowdesk-tiles"}
+        )
+        with urllib.request.urlopen(request) as response:  # noqa: S310 - checked
+            loaded: dict[str, Any] = json.loads(response.read().decode("utf-8"))
+            return loaded
     with open(source, encoding="utf-8") as handle:
-        return json.load(handle)
+        from_file: dict[str, Any] = json.load(handle)
+    return from_file
 
 
 def rewrite(style: dict[str, Any], origin: str, pmtiles: str) -> dict[str, Any]:
@@ -87,7 +97,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--origin",
         required=True,
-        help="self-hosted origin, e.g. https://tiles.snowdesk.info",
+        help="self-hosted origin, e.g. https://tiles.snowdesk-data.info",
     )
     parser.add_argument(
         "--pmtiles",

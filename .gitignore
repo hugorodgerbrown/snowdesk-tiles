@@ -1,10 +1,18 @@
-# Built map assets — never commit these; they live on the Render disk.
-/data/
+# Built map assets — never commit these; they are published to R2.
+/dist/
 *.pmtiles
-styles/
-sprites/
-fonts/
 
 # Local planetiler working files
 *.osm.pbf
 planetiler.jar
+data/
+
+# Python
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.venv/
+# No runtime dependencies, so there is nothing to lock.
+uv.lock

@@ -1,0 +1,13 @@
+[
+  {
+    "AllowedOrigins": [
+      "https://snowdesk.info",
+      "https://www.snowdesk.info",
+      "http://localhost:8000"
+    ],
+    "AllowedMethods": ["GET", "HEAD"],
+    "AllowedHeaders": ["range", "if-match"],
+    "ExposeHeaders": ["etag", "content-range", "content-length", "accept-ranges"],
+    "MaxAgeSeconds": 86400
+  }
+]
