@@ -160,16 +160,31 @@ cat <<EOF
 
 ==> Remaining manual step (Cloudflare dashboard, once)
 
-Add a Cache Rule so the style and sprite JSON are edge-cached. Cloudflare does
-not cache JSON by default, and .pmtiles is not a recognised extension either:
+Add a Cache Rule so the style, sprite JSON and glyph PBFs are edge-cached.
+Cloudflare decides cache eligibility by file extension and recognises none of
+those, so without a rule each one reaches R2 on every request.
 
     Rule name:  tiles-cache-everything
-    When:       Hostname equals ${domain}
-    Then:       Cache eligibility -> Eligible for cache
-                Edge TTL -> Use cache-control header if present
+    When:       Custom filter expression —
 
-Note the ${PMTILES_NAME} archive is larger than the 512 MB per-file cache limit
-on Free/Pro/Business plans, so its Range requests will always reach R2 rather
-than an edge cache. That is a latency question, not a cost one — R2 egress is
-free. See README.md "Caching and cost".
+        (http.host eq "${domain}" and
+         not ends_with(http.request.uri.path, ".pmtiles"))
+
+    Then:       Cache eligibility -> Eligible for cache
+                Edge TTL     -> Use cache-control header if present
+                Browser TTL  -> Respect origin TTL
+
+The .pmtiles exclusion is load-bearing. Marked cache-eligible, Cloudflare
+intercepts the archive, finds it over the 512 MB per-file limit, returns
+cf-cache-status: BYPASS — and strips the Range header on the way through,
+answering 200 with the whole ${PMTILES_NAME} body instead of 206 with the
+requested window. That breaks the reader outright: MapLibre would pull the
+entire archive for every tile lookup. Excluded, Range reaches R2 intact.
+
+Browser TTL must respect the origin, or the rule rewrites Cache-Control on the
+way out and overrides the per-asset values upload.sh set — including the
+style's deliberately short TTL, which is what lets a new archive be swapped in.
+
+Run ./scripts/verify.sh afterwards: it checks both that the archive still
+answers 206 and that the cacheable assets report HIT.
 EOF

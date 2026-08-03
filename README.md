@@ -250,12 +250,21 @@ Measured sizes for the `alps` build:
 Storage is $0.015/GB/month, so under $0.03. R2 has no egress fees, leaving Class
 B operations at $0.36/million reads. Total is a few pence a month.
 
-One caveat worth knowing: the `.pmtiles` archive is larger than Cloudflare's
-512 MB per-file cache limit on Free/Pro/Business plans, so its Range requests
-always reach R2 rather than an edge cache. That is a latency question, not a
-cost one. The style, sprites, glyphs and raster tiles are all small enough to
-cache at the edge, and SNOW-484's service worker absorbs repeat reads on the
-client.
+### The archive must be excluded from the Cache Rule
+
+The Cache Rule that makes the style, glyphs and sprite JSON edge-cacheable must
+**not** match `*.pmtiles`. Marked cache-eligible, Cloudflare intercepts the
+archive, finds it over the 512 MB per-file limit on Free/Pro/Business, returns
+`cf-cache-status: BYPASS` — and strips the `Range` header on the way through,
+answering `200` with the entire 1.5 GB body instead of `206` with the requested
+window. MapLibre then pulls the whole archive for every tile lookup.
+
+This is the CDN behaviour SNOW-485 predicted would break PMTiles, and it is
+easy to reintroduce: the rule looks correct, every asset still returns 200, and
+only the status code on a Range request gives it away. `verify.sh` checks for
+it. The archive is uncacheable at this size regardless, so excluding it costs
+nothing — R2 egress is free, and SNOW-484's service worker absorbs repeat reads
+on the client.
 
 ## Development
 
