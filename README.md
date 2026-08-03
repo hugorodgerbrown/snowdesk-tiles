@@ -124,6 +124,15 @@ billing means a two-hour build costs about €0.10. AWS and DigitalOcean equival
 cost several times more and give less disk. CCX33 (dedicated vCPU, 32 GB RAM) is
 the upgrade if you want it finished sooner.
 
+Not on Cloudflare, despite everything else living there. Containers cap at 20 GB
+disk and 12 GiB memory, Workers at 128 MB with a CPU-time limit, and there is no
+VM product — the build needs ~100 GB of disk and hours of JVM. Cloudflare holds
+the storage and does the serving; the build happens elsewhere and uploads in.
+
+OpenFreeMap publishes only `planet` and `monaco`, so there is no smaller
+prebuilt file to convert instead — and their planet is 101 GB of MBTiles, which
+needs the same class of machine to convert anyway.
+
 Create it with Ubuntu 24.04, then:
 
 ```bash
