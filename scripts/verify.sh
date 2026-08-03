@@ -68,6 +68,37 @@ check "vector tile is protobuf" "application/x-protobuf" \
 check "tilejson responds" 200 \
     "$(status "${TILES_ORIGIN}/tiles/tiles.json")"
 
+# Coverage, at named places rather than in the abstract. A regional extract is
+# clipped to a polygon, not a bounding box, so tiles are served across the whole
+# bbox and are simply empty outside it — every status check passes while parts
+# of Switzerland render blank. Basel returned 0 bytes under the "alps" extract
+# and nothing caught it.
+#
+# z10 tiles carrying real map data are tens of kB; a few hundred bytes means
+# boundary lines and nothing else.
+: "${MIN_TILE_BYTES:=20000}"
+coverage() {
+    local label=$1 tile=$2
+    local bytes
+    bytes=$(curl -s -o /dev/null -w '%{size_download}' "${TILES_ORIGIN}/tiles/${tile}.mvt")
+    if [ "$bytes" -ge "$MIN_TILE_BYTES" ]; then
+        printf '  ok    coverage: %s (%s bytes)\n' "$label" "$bytes"
+    else
+        printf '  FAIL  coverage: %s is empty or sparse (%s bytes)\n' "$label" "$bytes"
+        failures=$((failures + 1))
+    fi
+}
+
+# Swiss extremities first — the corners a regional extract clips off — then one
+# per country the avalanche regions span.
+coverage "Basel (CH north)" 10/533/357
+coverage "Geneva (CH west)" 10/529/363
+coverage "St Gallen (CH east)" 10/538/358
+coverage "Zermatt (CH alpine)" 10/534/364
+coverage "Innsbruck (AT)" 10/544/359
+coverage "Bolzano (IT)" 10/543/363
+coverage "Grenoble (FR)" 10/528/367
+
 # Content-Type is fixed at upload time and R2 does not infer it. A wrong one
 # fails inside MapLibre rather than at the HTTP layer, so every status check
 # above can pass while the map renders nothing.

@@ -38,7 +38,8 @@ binding = "BUCKET"
 bucket_name = "snowdesk-tiles"
 
 [vars]
-PMTILES_KEY = "alps.pmtiles"
+# Keep in step with PMTILES_NAME in scripts/config.sh.
+PMTILES_KEY = "planet.pmtiles"
 # Mirrors r2-cors.json. Kept as a var rather than hardcoded so the allowlist
 # moves with the deployment.
 # Keep in step with r2-cors.json. The staging origin was in the original

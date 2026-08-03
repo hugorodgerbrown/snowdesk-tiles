@@ -23,7 +23,13 @@
 # Filename of the vector-tile archive, on disk and as the R2 object key. The
 # Worker reads it through its R2 binding — keep PMTILES_KEY in worker/wrangler.toml
 # in step with this.
-: "${PMTILES_NAME:=alps.pmtiles}"
+#
+# Planet, not a regional extract. A Geofabrik extract is clipped to a polygon
+# rather than a bounding box, and the "alps" polygon leaves holes inside
+# Switzerland: Basel returned an empty tile and the Jura was effectively absent.
+# Matching tiles.openfreemap.org means the planet, so fetch-planet.sh takes
+# OpenFreeMap's own build rather than deriving one.
+: "${PMTILES_NAME:=planet.pmtiles}"
 
 # XYZ template the Worker serves, relative to the origin. Written into the style
 # as the vector source's tiles array; must match the route in
