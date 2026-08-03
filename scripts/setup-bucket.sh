@@ -19,7 +19,11 @@ cd "$(dirname "$0")/.."
 # shellcheck source=scripts/config.sh
 source scripts/config.sh
 
-: "${CLOUDFLARE_ZONE_ID:?set CLOUDFLARE_ZONE_ID for the snowdesk-data.info zone}"
+# CLOUDFLARE_ZONE_ID is optional on purpose: the bucket and its CORS policy can
+# be created before the zone is live on Cloudflare, so a pending nameserver
+# transfer does not block staging and uploading the assets. Rerun with the zone
+# id once the transfer completes to attach the domain.
+: "${CLOUDFLARE_ZONE_ID:=}"
 : "${R2_LOCATION_HINT:=weur}"
 
 wrangler=${WRANGLER:-npx wrangler}
@@ -33,6 +37,20 @@ echo "==> applying CORS policy from r2-cors.json"
 # If wrangler rejects the file, paste r2-cors.json into the dashboard editor
 # instead (R2 > bucket > Settings > CORS Policy); it takes the same shape.
 $wrangler r2 bucket cors set "$R2_BUCKET" --file r2-cors.json --force
+
+if [ -z "$CLOUDFLARE_ZONE_ID" ]; then
+    cat >&2 <<EOF
+
+==> skipping custom domain: CLOUDFLARE_ZONE_ID is not set
+
+The bucket and its CORS policy are in place, so you can build and upload now.
+Once ${domain#*.} is active on Cloudflare nameservers, rerun with the zone id
+from the zone's overview page to attach ${domain}:
+
+    CLOUDFLARE_ZONE_ID=... ./scripts/setup-bucket.sh
+EOF
+    exit 0
+fi
 
 echo "==> attaching custom domain ${domain}"
 $wrangler r2 bucket domain add "$R2_BUCKET" \
