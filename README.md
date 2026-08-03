@@ -114,7 +114,7 @@ that the only thing the style rewrite has to change is the hostname:
   Ranges upstream does not publish 404 and are skipped; that is expected.
 - **Natural Earth raster** — Liberty layers a shaded-relief raster under the
   vector data at low zoom (`ne2_shaded`, maxzoom 6). That is 5,461 tiles and
-  **about 1 GB**, and it is the slow part of the mirror. Skip it with
+  ~310 MB, and it is the slow part of the mirror by request count. Skip it with
   `python scripts/mirror_assets.py --skip-raster` while iterating, but ship it:
   without it the basemap 404s when zoomed out.
 - **The style itself**, rewritten by `rewrite_style.py` to point every sprite,
@@ -224,8 +224,18 @@ To swap archives without a stale-cache window, upload under a new
 
 ## Caching and cost
 
-Storage is ~5 GB at $0.015/GB/month. R2 has no egress fees, so the running cost
-is Class B operations at $0.36/million reads. Total is well under $1/month.
+Measured sizes for the `alps` build:
+
+| | Size | Files |
+|---|---|---|
+| `alps.pmtiles` | 1.5 GB | 1 |
+| `natural_earth/` | 311 MB | 5,461 |
+| `fonts/` | 101 MB | 768 |
+| `sprites/` + `styles/` | 332 KB | 5 |
+| **Total** | **1.9 GB** | **6,235** |
+
+Storage is $0.015/GB/month, so under $0.03. R2 has no egress fees, leaving Class
+B operations at $0.36/million reads. Total is a few pence a month.
 
 One caveat worth knowing: the `.pmtiles` archive is larger than Cloudflare's
 512 MB per-file cache limit on Free/Pro/Business plans, so its Range requests
