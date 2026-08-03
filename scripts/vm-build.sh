@@ -10,32 +10,54 @@
 # tile URL template, not the archive, and the Worker resolves the archive through
 # PMTILES_KEY. So this uploads one object and nothing else changes.
 #
-#     curl -fsSL https://raw.githubusercontent.com/hugorodgerbrown/snowdesk-tiles/main/scripts/vm-build.sh | bash
+#     git clone -b BRANCH https://github.com/hugorodgerbrown/snowdesk-tiles.git
+#     ./snowdesk-tiles/scripts/vm-build.sh
 #
-# or, having cloned the repo:
+# Not `curl ... | bash`: the prompts below read from stdin, which that form has
+# already given to the script itself.
 #
-#     CLOUDFLARE_ACCOUNT_ID=... AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=... \
-#         ./scripts/vm-build.sh
+# It prompts for the three R2 values rather than taking them on the command line,
+# so they stay out of shell history and the process table. Set them in the
+# environment beforehand if you would rather (CI, say).
 #
-# Use an R2 token scoped to Object Read & Write. It lives in this VM's shell
-# history and environment, so destroy the VM afterwards rather than keeping it
-# around — that is the cheapest form of credential rotation.
+# Use an R2 token scoped to Object Read & Write, and destroy the VM when the
+# build is done — the credentials are in its memory, and deleting the box is the
+# cheapest rotation there is.
 
 set -euo pipefail
+
+# REPO_BRANCH matters until the branch is merged: main does not have this script
+# yet, so a default clone would fetch a tree without it.
+: "${REPO_URL:=https://github.com/hugorodgerbrown/snowdesk-tiles.git}"
+: "${REPO_BRANCH:=main}"
 
 if [ -f scripts/config.sh ]; then
     cd "$(dirname "$0")/.."
 else
-    echo "==> cloning snowdesk-tiles"
-    git clone --depth 1 https://github.com/hugorodgerbrown/snowdesk-tiles.git
+    echo "==> cloning snowdesk-tiles (${REPO_BRANCH})"
+    command -v git >/dev/null 2>&1 || { sudo apt-get update -qq && sudo apt-get install -y -qq git; }
+    git clone --depth 1 --branch "$REPO_BRANCH" "$REPO_URL" snowdesk-tiles
     cd snowdesk-tiles
 fi
 # shellcheck source=scripts/config.sh
 source scripts/config.sh
 
-: "${CLOUDFLARE_ACCOUNT_ID:?set CLOUDFLARE_ACCOUNT_ID}"
-: "${AWS_ACCESS_KEY_ID:?set AWS_ACCESS_KEY_ID from an R2 token}"
-: "${AWS_SECRET_ACCESS_KEY:?set AWS_SECRET_ACCESS_KEY from an R2 token}"
+# Prompt rather than take these on the command line: an inline assignment lands
+# in shell history and is visible in the process table to anything else on the
+# box. read -s keeps the secret off both.
+prompt_secret() {
+    local name=$1 prompt=$2 value
+    if [ -n "${!name:-}" ]; then return; fi
+    printf '%s: ' "$prompt" >&2
+    read -rs value
+    printf '\n' >&2
+    [ -n "$value" ] || { echo "error: ${name} is required" >&2; exit 1; }
+    export "$name=$value"
+}
+
+prompt_secret CLOUDFLARE_ACCOUNT_ID "Cloudflare account ID"
+prompt_secret AWS_ACCESS_KEY_ID     "R2 access key ID"
+prompt_secret AWS_SECRET_ACCESS_KEY "R2 secret access key"
 
 echo "==> installing build dependencies"
 if command -v apt-get >/dev/null 2>&1; then

@@ -113,48 +113,66 @@ a Java Runtime", hence `JAVA_HOME`.
 ### Build it on a cloud VM, not your laptop
 
 The build needs **~100 GB of free disk** — a ~28 GB `europe` source, planetiler's
-working files, and the output. Renting a machine for two hours is cheaper and
-faster than clearing that much space locally, and the multi-GB intermediates
-never touch your disk.
-
-**Recommended: Hetzner Cloud CPX41** — 8 vCPU, 16 GB RAM, 240 GB NVMe, about
-€0.05/hour in Falkenstein or Nuremberg. Two reasons beyond price: Geofabrik is
-hosted in Germany, so the 28 GB source download runs at line speed, and hourly
-billing means a two-hour build costs about €0.10. AWS and DigitalOcean equivalents
-cost several times more and give less disk. CCX33 (dedicated vCPU, 32 GB RAM) is
-the upgrade if you want it finished sooner.
+working files, and the output. Renting a machine for two hours is cheaper than
+clearing that much space locally, and the multi-GB intermediates never touch your
+disk.
 
 Not on Cloudflare, despite everything else living there. Containers cap at 20 GB
 disk and 12 GiB memory, Workers at 128 MB with a CPU-time limit, and there is no
-VM product — the build needs ~100 GB of disk and hours of JVM. Cloudflare holds
-the storage and does the serving; the build happens elsewhere and uploads in.
+VM product. Cloudflare holds the storage and does the serving; the build happens
+elsewhere and uploads in. OpenFreeMap publishes only `planet` and `monaco`, so
+there is no smaller prebuilt file to convert as a way round it — and their planet
+is 101 GB of MBTiles, needing the same class of machine to convert anyway.
 
-OpenFreeMap publishes only `planet` and `monaco`, so there is no smaller
-prebuilt file to convert instead — and their planet is 101 GB of MBTiles, which
-needs the same class of machine to convert anyway.
+**Recommended: Hetzner Cloud CPX41** — 8 vCPU, 16 GB RAM, 240 GB NVMe, about
+€0.05/hour in Falkenstein or Nuremberg. Geofabrik is hosted in Germany, so the
+28 GB source download runs at line speed, and hourly billing means the whole job
+costs about €0.10. AWS and DigitalOcean equivalents cost several times more and
+give less disk. CCX33 (dedicated vCPU, 32 GB RAM) is the upgrade if you want it
+finished sooner.
 
-Create it with Ubuntu 24.04, then:
+#### From scratch
 
-```bash
-CLOUDFLARE_ACCOUNT_ID=... AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=... \
-    ./scripts/vm-build.sh
-```
+1. **Create the server.** console.hetzner.cloud → New Project → Add Server.
+   Location Falkenstein or Nuremberg, image **Ubuntu 24.04**, type **CPX41**,
+   and add your SSH key. Everything else default. It boots in under a minute.
 
-That installs Java and the AWS CLI, sizes planetiler's heap to the box, builds
-the archive, and uploads it straight to R2. **Only the archive is built and
-uploaded** — the style, sprites, glyphs and raster are already published and are
-unaffected, because the style names the tile URL template rather than the
-archive, and the Worker resolves the archive through `PMTILES_KEY`.
+2. **Get the R2 credentials to hand.** You need three values, all already in
+   1Password:
 
-Use an R2 token scoped to Object Read & Write, and **destroy the VM afterwards**:
-the credentials are in its shell history and environment, and deleting the box is
-the cheapest rotation there is.
+   ```bash
+   op item get "CloudFlare R2 - Snowdesk" --format json \
+       | jq -r '.fields[] | select(.label|test("Account ID|S3 Access Key ID|S3 Secret Access Key")) | "\(.label): \(.value)"'
+   ```
 
-Then, locally:
+3. **SSH in and run the build.** Replace the branch with `main` once this has
+   merged:
 
-```bash
-./scripts/verify.sh
-```
+   ```bash
+   ssh root@<server-ip>
+   git clone -b claude/openfreemap-tiles-deploy-f1f389 \
+       https://github.com/hugorodgerbrown/snowdesk-tiles.git
+   ./snowdesk-tiles/scripts/vm-build.sh
+   ```
+
+   It prompts for the three values — paste each one; they are not echoed and do
+   not reach shell history. Then it installs Java and the AWS CLI, checks disk,
+   sizes planetiler's heap to the box, builds, and uploads to R2. Expect one to
+   two hours; run it under `tmux` if your connection is unreliable.
+
+4. **Destroy the server.** Hetzner console → Server → Delete. The R2 credentials
+   were in its memory, and deleting the box is the cheapest rotation there is.
+
+5. **Verify, from your laptop:**
+
+   ```bash
+   ./scripts/verify.sh
+   ```
+
+Only the archive is built and uploaded. The style, sprites, glyphs and raster are
+already published and unaffected — the style names the tile URL template rather
+than the archive, and the Worker resolves the archive through `PMTILES_KEY`. So
+this replaces one object and changes nothing else.
 
 ### The bounding box matches the live map
 
