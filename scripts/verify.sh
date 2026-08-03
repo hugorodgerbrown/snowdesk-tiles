@@ -89,14 +89,14 @@ coverage() {
     fi
 }
 
-# One point per served region cluster, taken from region_info bounding boxes —
-# not a hand-picked tour of the Alps. The Pyrenees and Corsica are listed first
-# because they are the ones an Alpine extract silently drops: neither is
-# anywhere near the Alps, and no amount of testing around Switzerland finds them
-# missing.
-coverage "Pays-Basque (FR Pyrenees W)" 10/509/376
-coverage "Cerdagne-Canigou (FR Pyrenees E)" 10/518/378
-coverage "Corsica (FR-41)" 10/538/380
+# Corners and edges of the served area, not a tour of the middle. Basel and
+# Ajoie sit in the Swiss north-west, which is exactly what the "alps" polygon
+# clipped off while every check around the Alps kept passing.
+#
+# The Pyrenees and Corsica appear in the region reference data but are not served
+# on the map, so they are deliberately not checked here. If that changes, the
+# bounding box in config.sh has to change with it — neither is anywhere near
+# this box.
 coverage "Basel (CH N)" 10/533/357
 coverage "Ajoie (CH NW)" 10/532/358
 coverage "Geneva (CH W)" 10/529/363

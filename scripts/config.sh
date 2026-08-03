@@ -40,25 +40,17 @@ fi
 
 # Source extract planetiler downloads, and the bounding box it keeps.
 #
-# PLANETILER_BOUNDS is the important one. A Geofabrik area is clipped to a
-# *polygon*, so tiles outside it are generated but empty — under the "alps"
-# polygon, Basel returned a 0-byte tile and the Jura was effectively absent,
-# while every HTTP check still passed. A bounds rectangle has no such holes.
+# The box matches the live map's extent: roughly Paris to Zagreb, Luxembourg to
+# central Italy. It covers all of Switzerland and Austria, northern Italy, the
+# French Alps, southern Germany and Slovenia.
 #
-# The box is the union of every served avalanche region plus margin, NOT the
-# Alps. Sampling region_info for the extremes gives:
-#
-#     west   -1.31  Pays-Basque      (FR-64, Pyrenees)
-#     east   16.37  Semmering        (AT-03-05, Lower Austria)
-#     south  41.70  Renoso-Incudine  (FR-41, Corsica)
-#     north  48.08  Ybbstaler Alpen  (AT-03-01)
-#
-# The Pyrenees and Corsica are the ones that catch you out — neither is anywhere
-# near the Alps, and any Alpine box silently drops both. The margin also takes in
-# the live map's default zoomed-out extent (Paris to Zagreb) so it does not end
-# mid-view.
+# PLANETILER_BOUNDS is the load-bearing part. A Geofabrik area is clipped to a
+# *polygon*, so tiles outside it are generated but empty — under "alps", Basel
+# returned a 0-byte tile and the Jura was effectively absent, while every HTTP
+# check still passed. A bounds rectangle has no such holes. "europe" is the
+# smallest Geofabrik source containing the box; only the box is processed.
 : "${PLANETILER_AREA:=europe}"
-: "${PLANETILER_BOUNDS:=-3.0,40.5,18.0,50.0}"
+: "${PLANETILER_BOUNDS:=1.0,42.0,18.0,50.5}"
 : "${PLANETILER_VERSION:=0.8.3}"
 : "${PLANETILER_MEMORY:=8g}"
 

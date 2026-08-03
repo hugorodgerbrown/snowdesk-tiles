@@ -23,6 +23,7 @@ entry) lives in `snowdesk-data-pipeline` under SNOW-242.
 | `scripts/build.sh` | Runs the two above to assemble `dist/`. |
 | `scripts/upload.sh` | Publishes `dist/` to R2 with per-class Content-Type and Cache-Control. |
 | `scripts/setup-bucket.sh` | One-time bucket creation. |
+| `scripts/vm-build.sh` | Builds the archive on a throwaway VM and uploads it to R2. |
 | `scripts/verify.sh` | Acceptance checks against the live origin. |
 | `worker/` | Worker serving XYZ tiles, and the CORS allowlist (`ALLOWED_ORIGINS`). |
 
@@ -98,33 +99,65 @@ that derivation exists to prevent.
 
 ## Step 1 — Build the vector tile archive
 
+Use a cloud VM — see below. To run it locally anyway you need ~100 GB free and
+Java 21+:
+
 ```bash
 JAVA_HOME=$(brew --prefix openjdk@21) ./scripts/build-extract.sh
 ```
 
-Requires Java 21+ and **~100 GB free disk**: the `europe` source is ~28 GB, and
-planetiler needs working space and the output on top. On macOS, Homebrew's
-versioned JDKs are keg-only — installed but not symlinked onto `PATH` — and
-`/usr/bin/java` stays Apple's stub reporting "Unable to locate a Java Runtime",
-hence `JAVA_HOME`.
+On macOS, Homebrew's versioned JDKs are keg-only — installed but not symlinked
+onto `PATH` — and `/usr/bin/java` stays Apple's stub reporting "Unable to locate
+a Java Runtime", hence `JAVA_HOME`.
 
-### The bounding box is derived from the served regions, not drawn round the Alps
+### Build it on a cloud VM, not your laptop
 
-`PLANETILER_BOUNDS` defaults to `-3.0,40.5,18.0,50.0`. That is the union of
-every avalanche region Snowdesk serves, plus margin. Sampling `region_info` for
-the extremes gives:
+The build needs **~100 GB of free disk** — a ~28 GB `europe` source, planetiler's
+working files, and the output. Renting a machine for two hours is cheaper and
+faster than clearing that much space locally, and the multi-GB intermediates
+never touch your disk.
 
-| | | |
-|---|---|---|
-| west | −1.31°E | Pays-Basque (FR-64, Pyrenees) |
-| east | 16.37°E | Semmering (AT-03-05, Lower Austria) |
-| south | 41.70°N | Renoso-Incudine (FR-41, Corsica) |
-| north | 48.08°N | Ybbstaler Alpen (AT-03-01) |
+**Recommended: Hetzner Cloud CPX41** — 8 vCPU, 16 GB RAM, 240 GB NVMe, about
+€0.05/hour in Falkenstein or Nuremberg. Two reasons beyond price: Geofabrik is
+hosted in Germany, so the 28 GB source download runs at line speed, and hourly
+billing means a two-hour build costs about €0.10. AWS and DigitalOcean equivalents
+cost several times more and give less disk. CCX33 (dedicated vCPU, 32 GB RAM) is
+the upgrade if you want it finished sooner.
 
-**Snowdesk serves the Pyrenees and Corsica**, not only the Alps — FR-64 through
-FR-74, and FR-40/FR-41. Neither is anywhere near the Alps, so any Alpine extract
-drops both entirely, and no amount of testing around Switzerland reveals it.
-`verify.sh` checks one point per region cluster for exactly this reason.
+Create it with Ubuntu 24.04, then:
+
+```bash
+CLOUDFLARE_ACCOUNT_ID=... AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=... \
+    ./scripts/vm-build.sh
+```
+
+That installs Java and the AWS CLI, sizes planetiler's heap to the box, builds
+the archive, and uploads it straight to R2. **Only the archive is built and
+uploaded** — the style, sprites, glyphs and raster are already published and are
+unaffected, because the style names the tile URL template rather than the
+archive, and the Worker resolves the archive through `PMTILES_KEY`.
+
+Use an R2 token scoped to Object Read & Write, and **destroy the VM afterwards**:
+the credentials are in its shell history and environment, and deleting the box is
+the cheapest rotation there is.
+
+Then, locally:
+
+```bash
+./scripts/verify.sh
+```
+
+### The bounding box matches the live map
+
+`PLANETILER_BOUNDS` defaults to `1.0,42.0,18.0,50.5` — the extent the map is
+actually used at, roughly Paris to Zagreb and Luxembourg to central Italy. It
+covers all of Switzerland and Austria, northern Italy, the French Alps, southern
+Germany and Slovenia.
+
+The region reference data also lists Pyrenees (FR-64…FR-74) and Corsica
+(FR-40/41) regions, which are **not** served on the map and are deliberately
+outside this box. If that ever changes, the box has to change with it — neither
+is anywhere near it.
 
 ### Use bounds, never a Geofabrik area alone
 
