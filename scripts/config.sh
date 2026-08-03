@@ -23,13 +23,7 @@
 # Filename of the vector-tile archive, on disk and as the R2 object key. The
 # Worker reads it through its R2 binding — keep PMTILES_KEY in worker/wrangler.toml
 # in step with this.
-#
-# Planet, not a regional extract. A Geofabrik extract is clipped to a polygon
-# rather than a bounding box, and the "alps" polygon leaves holes inside
-# Switzerland: Basel returned an empty tile and the Jura was effectively absent.
-# Matching tiles.openfreemap.org means the planet, so fetch-planet.sh takes
-# OpenFreeMap's own build rather than deriving one.
-: "${PMTILES_NAME:=planet.pmtiles}"
+: "${PMTILES_NAME:=snowdesk.pmtiles}"
 
 # XYZ template the Worker serves, relative to the origin. Written into the style
 # as the vector source's tiles array; must match the route in
@@ -44,9 +38,27 @@ if [ -z "${TILE_PATH:-}" ]; then
     TILE_PATH='tiles/{z}/{x}/{y}.mvt'
 fi
 
-# Geofabrik area planetiler builds. "alps" covers CH / AT / IT-South-Tyrol /
-# FR-Alps — every current avalanche region.
-: "${PLANETILER_AREA:=alps}"
+# Source extract planetiler downloads, and the bounding box it keeps.
+#
+# PLANETILER_BOUNDS is the important one. A Geofabrik area is clipped to a
+# *polygon*, so tiles outside it are generated but empty — under the "alps"
+# polygon, Basel returned a 0-byte tile and the Jura was effectively absent,
+# while every HTTP check still passed. A bounds rectangle has no such holes.
+#
+# The box is the union of every served avalanche region plus margin, NOT the
+# Alps. Sampling region_info for the extremes gives:
+#
+#     west   -1.31  Pays-Basque      (FR-64, Pyrenees)
+#     east   16.37  Semmering        (AT-03-05, Lower Austria)
+#     south  41.70  Renoso-Incudine  (FR-41, Corsica)
+#     north  48.08  Ybbstaler Alpen  (AT-03-01)
+#
+# The Pyrenees and Corsica are the ones that catch you out — neither is anywhere
+# near the Alps, and any Alpine box silently drops both. The margin also takes in
+# the live map's default zoomed-out extent (Paris to Zagreb) so it does not end
+# mid-view.
+: "${PLANETILER_AREA:=europe}"
+: "${PLANETILER_BOUNDS:=-3.0,40.5,18.0,50.0}"
 : "${PLANETILER_VERSION:=0.8.3}"
 : "${PLANETILER_MEMORY:=8g}"
 
@@ -65,4 +77,4 @@ fi
 
 export TILES_ORIGIN R2_BUCKET PMTILES_NAME PLANETILER_AREA PLANETILER_VERSION
 export PLANETILER_MEMORY UPSTREAM_ORIGIN UPSTREAM_STYLE_URL DIST_DIR
-export IMMUTABLE_CACHE STYLE_CACHE TILE_PATH
+export IMMUTABLE_CACHE STYLE_CACHE TILE_PATH PLANETILER_BOUNDS

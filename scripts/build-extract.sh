@@ -5,11 +5,18 @@
 # schema; the ready-made extracts at protomaps.com/extracts use the Protomaps
 # schema and will not render with Liberty. Do not substitute them.
 #
-# Requires Java 21+ and roughly PLANETILER_MEMORY of free RAM. The "alps" area
-# takes ~20 minutes on a laptop and produces a 2-4 GB archive.
+# Requires Java 21+ and roughly PLANETILER_MEMORY of free RAM.
+#
+# PLANETILER_BOUNDS is what keeps the output honest. A Geofabrik area is clipped
+# to a polygon, so the "alps" area produced tiles that were served but empty
+# outside it — Basel came back as a 0-byte tile. --bounds keeps a true
+# rectangle, so there are no holes inside it.
+#
+# The "europe" source is ~28 GB to download once; only the bounds are processed,
+# so the archive stays a few GB. Expect an hour or two on a laptop.
 #
 #     ./scripts/build-extract.sh
-#     PLANETILER_AREA=europe PMTILES_NAME=europe.pmtiles ./scripts/build-extract.sh
+#     PLANETILER_BOUNDS=3,42,19,51 ./scripts/build-extract.sh
 
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -52,10 +59,12 @@ fi
 
 mkdir -p "$DIST_DIR"
 
-echo "==> building ${PLANETILER_AREA} -> ${DIST_DIR}/${PMTILES_NAME}"
+echo "==> building ${PLANETILER_AREA} within ${PLANETILER_BOUNDS}"
+echo "    -> ${DIST_DIR}/${PMTILES_NAME}"
 "$java" "-Xmx${PLANETILER_MEMORY}" -jar "$jar" \
     --download \
     --area="$PLANETILER_AREA" \
+    --bounds="$PLANETILER_BOUNDS" \
     --output="${DIST_DIR}/${PMTILES_NAME}" \
     --force
 

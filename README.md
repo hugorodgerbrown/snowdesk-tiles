@@ -99,30 +99,44 @@ that derivation exists to prevent.
 ## Step 1 — Build the vector tile archive
 
 ```bash
-./scripts/build-extract.sh
-```
-
-Requires Java 21+. On macOS, Homebrew's versioned JDKs are keg-only — installed
-but not symlinked onto `PATH` — and `/usr/bin/java` stays Apple's stub, which
-reports "Unable to locate a Java Runtime". Point `JAVA_HOME` at the cellar
-rather than putting a second Java on `PATH` for everything else:
-
-```bash
-brew install openjdk@21
 JAVA_HOME=$(brew --prefix openjdk@21) ./scripts/build-extract.sh
 ```
+
+Requires Java 21+ and **~100 GB free disk**: the `europe` source is ~28 GB, and
+planetiler needs working space and the output on top. On macOS, Homebrew's
+versioned JDKs are keg-only — installed but not symlinked onto `PATH` — and
+`/usr/bin/java` stays Apple's stub reporting "Unable to locate a Java Runtime",
+hence `JAVA_HOME`.
+
+### The bounding box is derived from the served regions, not drawn round the Alps
+
+`PLANETILER_BOUNDS` defaults to `-3.0,40.5,18.0,50.0`. That is the union of
+every avalanche region Snowdesk serves, plus margin. Sampling `region_info` for
+the extremes gives:
+
+| | | |
+|---|---|---|
+| west | −1.31°E | Pays-Basque (FR-64, Pyrenees) |
+| east | 16.37°E | Semmering (AT-03-05, Lower Austria) |
+| south | 41.70°N | Renoso-Incudine (FR-41, Corsica) |
+| north | 48.08°N | Ybbstaler Alpen (AT-03-01) |
+
+**Snowdesk serves the Pyrenees and Corsica**, not only the Alps — FR-64 through
+FR-74, and FR-40/FR-41. Neither is anywhere near the Alps, so any Alpine extract
+drops both entirely, and no amount of testing around Switzerland reveals it.
+`verify.sh` checks one point per region cluster for exactly this reason.
+
+### Use bounds, never a Geofabrik area alone
+
+A Geofabrik area is clipped to a **polygon**. Tiles outside it are still
+generated and served — they are simply empty — so every HTTP check passes while
+the map renders blank. Under `--area=alps`, Basel returned a 0-byte tile and the
+Jura was effectively absent, alongside the whole Pyrenees and Corsica.
+`--bounds` keeps a true rectangle, which has no such holes.
 
 The Liberty style expects the **OpenMapTiles** schema, which planetiler emits;
 the ready-made extracts at `protomaps.com/extracts` are Protomaps-schema and
 will not render with Liberty.
-
-The default `alps` Geofabrik area covers CH / AT / IT-South-Tyrol / FR-Alps —
-every current avalanche region — and produces a 2–4 GB archive in ~20 minutes.
-Widen coverage by overriding the area:
-
-```bash
-PLANETILER_AREA=europe PMTILES_NAME=europe.pmtiles ./scripts/build-extract.sh
-```
 
 ## Step 2 — Mirror the remaining assets and rewrite the style
 

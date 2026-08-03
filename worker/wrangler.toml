@@ -39,11 +39,10 @@ bucket_name = "snowdesk-tiles"
 
 [vars]
 # Keep in step with PMTILES_NAME in scripts/config.sh.
-PMTILES_KEY = "planet.pmtiles"
-# Mirrors r2-cors.json. Kept as a var rather than hardcoded so the allowlist
-# moves with the deployment.
-# Keep in step with r2-cors.json. The staging origin was in the original
-# Caddyfile allowlist and was lost in the move to R2 — a cross-origin failure
-# there looks like an outage from the app side, not a config gap.
-# 127.0.0.1 is listed alongside localhost because they are distinct origins.
+PMTILES_KEY = "snowdesk.pmtiles"
+# The only CORS allowlist there is — the bucket has no custom domain, so its own
+# policy never applies. The staging origin was in the original Caddyfile list and
+# was lost in the move to R2; a cross-origin failure there looks like an outage
+# from the app side, not a config gap. 127.0.0.1 is listed alongside localhost
+# because a browser treats them as distinct origins.
 ALLOWED_ORIGINS = "https://snowdesk.info https://www.snowdesk.info https://snowdesk-staging.onrender.com http://localhost:8000 http://127.0.0.1:8000"

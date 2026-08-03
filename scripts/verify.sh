@@ -89,15 +89,25 @@ coverage() {
     fi
 }
 
-# Swiss extremities first — the corners a regional extract clips off — then one
-# per country the avalanche regions span.
-coverage "Basel (CH north)" 10/533/357
-coverage "Geneva (CH west)" 10/529/363
-coverage "St Gallen (CH east)" 10/538/358
+# One point per served region cluster, taken from region_info bounding boxes —
+# not a hand-picked tour of the Alps. The Pyrenees and Corsica are listed first
+# because they are the ones an Alpine extract silently drops: neither is
+# anywhere near the Alps, and no amount of testing around Switzerland finds them
+# missing.
+coverage "Pays-Basque (FR Pyrenees W)" 10/509/376
+coverage "Cerdagne-Canigou (FR Pyrenees E)" 10/518/378
+coverage "Corsica (FR-41)" 10/538/380
+coverage "Basel (CH N)" 10/533/357
+coverage "Ajoie (CH NW)" 10/532/358
+coverage "Geneva (CH W)" 10/529/363
 coverage "Zermatt (CH alpine)" 10/534/364
+coverage "St Gallen (CH E)" 10/538/358
+coverage "Ybbstaler (AT N)" 10/554/356
+coverage "Semmering (AT E)" 10/557/357
 coverage "Innsbruck (AT)" 10/544/359
-coverage "Bolzano (IT)" 10/543/363
-coverage "Grenoble (FR)" 10/528/367
+coverage "Canin (IT Giulie)" 10/550/362
+coverage "Bolzano (IT)" 10/544/362
+coverage "Grenoble (FR Alps)" 10/528/367
 
 # Content-Type is fixed at upload time and R2 does not infer it. A wrong one
 # fails inside MapLibre rather than at the HTTP layer, so every status check
