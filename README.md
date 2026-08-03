@@ -147,6 +147,17 @@ extensions by default.
 ## Step 4 — Publish
 
 ```bash
+op run --env-file=.env.1password -- ./scripts/upload.sh
+```
+
+Credentials come from an R2 API token. `.env.1password` holds 1Password
+*references*, not values — `op run` resolves them at launch and injects them
+into the child process only, so nothing is written to disk and no secret lands
+in shell history. Adjust the vault and item names in that file to match your
+setup. Any other mechanism works too, as long as the three variables are in the
+environment:
+
+```bash
 CLOUDFLARE_ACCOUNT_ID=... AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=... \
     ./scripts/upload.sh
 ```
@@ -163,9 +174,6 @@ the current archive and gets an hour.
 
 The style is uploaded **last**, so a client fetching the new style never sees it
 before the tiles it references exist.
-
-Credentials come from an R2 API token; keep them in the Keychain rather than
-exported in a shell init file.
 
 ## Step 5 — Verify
 
