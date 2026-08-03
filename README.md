@@ -17,7 +17,7 @@ entry) lives in `snowdesk-data-pipeline` under SNOW-242.
 | Path | Purpose |
 |------|---------|
 | `scripts/config.sh` | Every tunable, as an env var with a default. Sourced by the rest. |
-| `scripts/build-extract.sh` | planetiler → `dist/alps.pmtiles`. Slow; rarely rerun. |
+| `scripts/build-extract.sh` | planetiler → `dist/snowdesk.pmtiles`. Slow; needs ~100 GB disk. |
 | `scripts/mirror_assets.py` | Mirrors sprites, glyphs and the Natural Earth raster from upstream. |
 | `scripts/rewrite_style.py` | Repoints the Liberty style JSON at our origin and archive. |
 | `scripts/build.sh` | Runs the two above to assemble `dist/`. |
@@ -83,8 +83,8 @@ That is the reason for the Worker. Client-side PMTiles was the original design,
 but it needs `maplibregl.addProtocol` *and* it hands the frontend a source with
 no tile URLs. Snowdesk's map cannot work with that: SNOW-521 resolves each
 basemap's vector-tile URL template and SNOW-484's service worker pins basemap
-URLs for offline use, and neither can express range reads into a single 1.5 GB
-object.
+URLs for offline use, and neither can express range reads into a single
+multi-GB object.
 
 It also fixes the caching problem. The archive is over Cloudflare's 512 MB
 per-file limit and so is never edge-cached — every range read reaches R2.
@@ -168,7 +168,7 @@ dist/
 ├── sprites/ofm_f384/ofm{,@2x}.{json,png}
 ├── fonts/{fontstack}/{range}.pbf
 ├── natural_earth/ne2sr/{z}/{x}/{y}.png
-└── alps.pmtiles
+└── snowdesk.pmtiles
 ```
 
 ## Step 3 — Provision the bucket (once)
@@ -310,19 +310,20 @@ To swap archives without a stale-cache window, upload under a new
 
 ## Caching and cost
 
-Measured sizes for the `alps` build:
+Measured sizes for the superseded `alps` build, as an order-of-magnitude guide.
+The region-derived box covers a much larger area, so expect the archive to be
+several times bigger:
 
-| | Size | Files |
+| | Size | Objects |
 |---|---|---|
-| `alps.pmtiles` | 1.5 GB | 1 |
+| `alps.pmtiles` (superseded) | 1.5 GB | 1 |
 | `natural_earth/` | 311 MB | 5,461 |
 | `fonts/` | 101 MB | 768 |
 | `sprites/` + `styles/` | 332 KB | 5 |
-| **Total** | **1.9 GB** | **6,235** |
 
-Storage is $0.015/GB/month, so under $0.03, and R2 has no egress fees. The
-running cost is per-request: R2 Class B operations at $0.36/million, plus
-Cloudflare Workers.
+Storage is $0.015/GB/month, so even a 20 GB archive is about $0.30. R2 has no
+egress fees. The running cost is per-request: R2 Class B operations at
+$0.36/million, plus Cloudflare Workers.
 
 **Workers requests are the figure to watch.** Because the R2 custom domain would
 not yield to a path-scoped route, the Worker owns the hostname and every request
@@ -330,8 +331,7 @@ goes through it — not just tiles, but glyphs, sprites and the style too. The
 free tier is 100k requests/day, and a single map session pulls dozens of tiles
 plus glyph ranges. That is comfortable for current traffic and would not survive
 a busy day at 10× it; check the Workers dashboard before assuming otherwise.
-Beyond the free tier it is $0.30/million, so the exposure is small in absolute
-terms.
+Beyond the free tier it is $0.30/million.
 
 The edge cache absorbs most repeat reads before they reach either meter: tiles
 and glyphs are immutable and cache normally. It is the cold, wide-ranging
@@ -341,7 +341,7 @@ sessions that cost.
 
 Vector tiles now come from the Worker, which reads byte windows out of the
 archive through the R2 binding. The archive is still served whole at
-`/alps.pmtiles` — `verify.sh` checks its Range behaviour, and it remains the
+`/snowdesk.pmtiles` — `verify.sh` checks its Range behaviour, and it remains the
 thing to point a `pmtiles://` client at — but no browser fetches it during
 normal map use.
 
