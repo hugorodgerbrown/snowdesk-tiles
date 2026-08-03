@@ -3,7 +3,9 @@
     "AllowedOrigins": [
       "https://snowdesk.info",
       "https://www.snowdesk.info",
-      "http://localhost:8000"
+      "https://snowdesk-staging.onrender.com",
+      "http://localhost:8000",
+      "http://127.0.0.1:8000"
     ],
     "AllowedMethods": ["GET", "HEAD"],
     "AllowedHeaders": ["range", "if-match"],

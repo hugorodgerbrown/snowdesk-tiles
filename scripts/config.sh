@@ -28,7 +28,15 @@
 # XYZ template the Worker serves, relative to the origin. Written into the style
 # as the vector source's tiles array; must match the route in
 # worker/wrangler.toml.
-: "${TILE_PATH:=tiles/\{z\}/\{x\}/\{y\}.mvt}"
+# Not the `: "${VAR:=default}"` form the other settings use: the value contains
+# braces, and inside a parameter expansion the first unescaped `}` ends the
+# expansion — `${TILE_PATH:=tiles/{z}/...}` yields "tiles/{z". Escaping the
+# braces does not help either; the backslashes survive into the value and get
+# published in the style. A plain single-quoted assignment is the only form that
+# round-trips.
+if [ -z "${TILE_PATH:-}" ]; then
+    TILE_PATH='tiles/{z}/{x}/{y}.mvt'
+fi
 
 # Geofabrik area planetiler builds. "alps" covers CH / AT / IT-South-Tyrol /
 # FR-Alps — every current avalanche region.
