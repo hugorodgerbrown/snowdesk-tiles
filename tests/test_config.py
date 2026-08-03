@@ -28,23 +28,31 @@ def config_value(name: str, env: dict[str, str] | None = None) -> str:
     return result.stdout
 
 
-def test_tile_path_keeps_its_braces() -> None:
-    assert config_value("TILE_PATH") == "tiles/{z}/{x}/{y}.mvt"
-
-
 def test_tile_path_has_no_stray_backslashes() -> None:
     # Escaping the braces round-tripped the backslashes into the style as
     # "/tiles/\{z}/\{x}/\{y}.mvt".
     assert "\\" not in config_value("TILE_PATH")
 
 
-def test_tile_path_can_be_overridden() -> None:
-    override = "vector/{z}/{x}/{y}.pbf"
-
-    assert config_value("TILE_PATH", {"TILE_PATH": override}) == override
-
-
 def test_origin_has_no_trailing_slash() -> None:
     # rewrite_style.py strips one, but a doubled slash in the default would
     # still show up anywhere else the value is interpolated.
     assert not config_value("TILES_ORIGIN").endswith("/")
+
+
+def test_tile_path_carries_the_version() -> None:
+    # The version is the whole point: without it a rebuilt archive reuses tile
+    # URLs that are cached immutable for a year, and the swap is invisible.
+    assert config_value("TILE_PATH") == "tiles/v1/{z}/{x}/{y}.mvt"
+
+
+def test_tile_version_flows_into_tile_path() -> None:
+    path = config_value("TILE_PATH", {"TILE_VERSION": "v9"})
+
+    assert path == "tiles/v9/{z}/{x}/{y}.mvt"
+
+
+def test_explicit_tile_path_still_wins() -> None:
+    override = "custom/{z}/{x}/{y}.pbf"
+
+    assert config_value("TILE_PATH", {"TILE_PATH": override}) == override

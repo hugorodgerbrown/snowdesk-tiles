@@ -66,8 +66,10 @@ supported for production traffic.
 
 The Worker (`worker/`) owns the hostname and answers everything:
 
-- `/tiles/{z}/{x}/{y}.mvt` — vector tiles, read as byte windows out of the
-  `.pmtiles` archive through an R2 binding. The archive is never fetched whole.
+- `/tiles/<version>/{z}/{x}/{y}.mvt` — vector tiles, read as byte windows out of
+  the `.pmtiles` archive through an R2 binding. The archive is never fetched
+  whole. The Worker ignores the version segment; it exists so a rebuilt archive
+  gets fresh URLs (see below).
 - Everything else — style, sprites, glyphs, the Natural Earth raster — passed
   through to the bucket, returning each object's stored `Content-Type` and
   `Cache-Control` (the values `upload.sh` set; R2 infers neither).
@@ -205,6 +207,21 @@ Jura was effectively absent, alongside the whole Pyrenees and Corsica.
 The Liberty style expects the **OpenMapTiles** schema, which planetiler emits;
 the ready-made extracts at `protomaps.com/extracts` are Protomaps-schema and
 will not render with Liberty.
+
+### Bump TILE_VERSION on every rebuild
+
+Tiles are served `immutable` for a year and cached by URL — at the edge and in
+the browser. Replacing the archive under a fixed path therefore changes nothing
+a client can see: the old tiles keep being served until they expire, and
+`verify.sh` reports the old coverage, which reads as a failed build.
+
+`TILE_VERSION` in `config.sh` is the path segment that fixes this. Bump it, run
+`build.sh`, upload — the new archive gets new URLs and takes effect at once, with
+no cache purge.
+
+The Worker ignores the segment and always reads `PMTILES_KEY`, so a bump needs
+no Worker deploy, and requests still arriving for the previous version return
+current data — which matters while the old style is inside its one-hour TTL.
 
 ## Step 2 — Mirror the remaining assets and rewrite the style
 

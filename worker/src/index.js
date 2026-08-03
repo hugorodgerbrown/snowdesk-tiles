@@ -34,7 +34,14 @@ const TILE_CACHE_CONTROL = "public, max-age=31536000, immutable";
 // the style document, same TTL.
 const TILEJSON_CACHE_CONTROL = "public, max-age=3600";
 
-const TILE_PATH = /^\/tiles\/(\d+)\/(\d+)\/(\d+)\.(mvt|pbf)$/;
+// /tiles/<version>/{z}/{x}/{y}.mvt — the version segment is captured and then
+// ignored. It exists to give a rebuilt archive fresh URLs: tiles are immutable
+// for a year and cached by URL, so replacing the archive under a fixed path
+// would change nothing a client can see. Because the Worker does not act on it,
+// bumping TILE_VERSION needs only the style republished, and requests for an
+// older version keep working and return current data.
+const TILE_PATH = /^\/tiles\/[^/]+\/(\d+)\/(\d+)\/(\d+)\.(mvt|pbf)$/;
+const TILEJSON_PATH = /^\/tiles\/[^/]+\/tiles\.json$/;
 
 /**
  * Reads byte ranges out of the archive through the R2 binding.
@@ -116,11 +123,14 @@ function allowedOriginList(env) {
  */
 async function tileJson(archive, request, env) {
   const header = await archive.getHeader();
-  const origin = new URL(request.url).origin;
+  const url = new URL(request.url);
+  // Advertise tiles under the same version the TileJSON was fetched with, so a
+  // client following it stays on one set of URLs.
+  const version = url.pathname.split("/")[2];
 
   return {
     tilejson: "3.0.0",
-    tiles: [`${origin}/tiles/{z}/{x}/{y}.mvt`],
+    tiles: [`${url.origin}/tiles/${version}/{z}/{x}/{y}.mvt`],
     minzoom: header.minZoom,
     maxzoom: header.maxZoom,
     bounds: [
@@ -212,7 +222,7 @@ export default {
     const archive = new PMTiles(new R2Source(env.BUCKET, env.PMTILES_KEY));
 
     let response;
-    if (url.pathname === "/tiles/tiles.json") {
+    if (TILEJSON_PATH.test(url.pathname)) {
       response = Response.json(await tileJson(archive, request, env), {
         headers: { "Cache-Control": TILEJSON_CACHE_CONTROL },
       });

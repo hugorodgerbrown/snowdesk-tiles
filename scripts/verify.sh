@@ -62,11 +62,11 @@ check "natural earth raster responds" 200 \
 # style resolves and every other asset loads while the map renders empty, so
 # these are the checks that tell the two states apart.
 check "vector tile responds" 200 \
-    "$(status "${TILES_ORIGIN}/tiles/0/0/0.mvt")"
+    "$(status "${TILES_ORIGIN}/tiles/${TILE_VERSION}/0/0/0.mvt")"
 check "vector tile is protobuf" "application/x-protobuf" \
-    "$(content_type "${TILES_ORIGIN}/tiles/0/0/0.mvt")"
+    "$(content_type "${TILES_ORIGIN}/tiles/${TILE_VERSION}/0/0/0.mvt")"
 check "tilejson responds" 200 \
-    "$(status "${TILES_ORIGIN}/tiles/tiles.json")"
+    "$(status "${TILES_ORIGIN}/tiles/${TILE_VERSION}/tiles.json")"
 
 # Coverage, at named places rather than in the abstract. A regional extract is
 # clipped to a polygon, not a bounding box, so tiles are served across the whole
@@ -80,7 +80,7 @@ check "tilejson responds" 200 \
 coverage() {
     local label=$1 tile=$2
     local bytes
-    bytes=$(curl -s -o /dev/null -w '%{size_download}' "${TILES_ORIGIN}/tiles/${tile}.mvt")
+    bytes=$(curl -s -o /dev/null -w '%{size_download}' "${TILES_ORIGIN}/tiles/${TILE_VERSION}/${tile}.mvt")
     if [ "$bytes" -ge "$MIN_TILE_BYTES" ]; then
         printf '  ok    coverage: %s (%s bytes)\n' "$label" "$bytes"
     else
@@ -138,7 +138,7 @@ if [ -z "$allowed" ]; then
 fi
 
 for site in $allowed; do
-    acao=$(curl -sI -H "Origin: ${site}" "${TILES_ORIGIN}/tiles/0/0/0.mvt" \
+    acao=$(curl -sI -H "Origin: ${site}" "${TILES_ORIGIN}/tiles/${TILE_VERSION}/0/0/0.mvt" \
         | tr -d '\r' | grep -i '^access-control-allow-origin:' | cut -d' ' -f2-)
     check "CORS allows ${site}" "$site" "${acao:-<none>}"
 done

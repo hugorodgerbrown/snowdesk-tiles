@@ -25,9 +25,23 @@
 # in step with this.
 : "${PMTILES_NAME:=snowdesk.pmtiles}"
 
+# Tile URL version. Bump this whenever the archive is rebuilt.
+#
+# Tiles are served immutable for a year and cached by URL, at the edge and in the
+# browser. Replacing the archive under a fixed path therefore changes nothing a
+# client can see: the old tiles keep being served until they expire. Putting a
+# version in the path gives the new archive new URLs, so the swap takes effect
+# at once and no cache purge is needed.
+#
+# The Worker ignores the version segment and always reads PMTILES_KEY, so a bump
+# needs only the style rebuilt and re-uploaded — not a Worker deploy. Requests
+# for the previous version keep working and return current data, which matters
+# while the old style is still within its one-hour TTL.
+: "${TILE_VERSION:=v1}"
+
 # XYZ template the Worker serves, relative to the origin. Written into the style
-# as the vector source's tiles array; must match the route in
-# worker/wrangler.toml.
+# as the vector source's tiles array.
+#
 # Not the `: "${VAR:=default}"` form the other settings use: the value contains
 # braces, and inside a parameter expansion the first unescaped `}` ends the
 # expansion — `${TILE_PATH:=tiles/{z}/...}` yields "tiles/{z". Escaping the
@@ -35,24 +49,8 @@
 # published in the style. A plain single-quoted assignment is the only form that
 # round-trips.
 if [ -z "${TILE_PATH:-}" ]; then
-    TILE_PATH='tiles/{z}/{x}/{y}.mvt'
+    TILE_PATH="tiles/${TILE_VERSION}/{z}/{x}/{y}.mvt"
 fi
-
-# Source extract planetiler downloads, and the bounding box it keeps.
-#
-# The box matches the live map's extent: roughly Paris to Zagreb, Luxembourg to
-# central Italy. It covers all of Switzerland and Austria, northern Italy, the
-# French Alps, southern Germany and Slovenia.
-#
-# PLANETILER_BOUNDS is the load-bearing part. A Geofabrik area is clipped to a
-# *polygon*, so tiles outside it are generated but empty — under "alps", Basel
-# returned a 0-byte tile and the Jura was effectively absent, while every HTTP
-# check still passed. A bounds rectangle has no such holes. "europe" is the
-# smallest Geofabrik source containing the box; only the box is processed.
-: "${PLANETILER_AREA:=europe}"
-: "${PLANETILER_BOUNDS:=1.0,42.0,18.0,50.5}"
-: "${PLANETILER_VERSION:=0.8.3}"
-: "${PLANETILER_MEMORY:=8g}"
 
 # Upstream OpenFreeMap origin the assets are mirrored from.
 : "${UPSTREAM_ORIGIN:=https://tiles.openfreemap.org}"
@@ -69,4 +67,4 @@ fi
 
 export TILES_ORIGIN R2_BUCKET PMTILES_NAME PLANETILER_AREA PLANETILER_VERSION
 export PLANETILER_MEMORY UPSTREAM_ORIGIN UPSTREAM_STYLE_URL DIST_DIR
-export IMMUTABLE_CACHE STYLE_CACHE TILE_PATH PLANETILER_BOUNDS
+export IMMUTABLE_CACHE STYLE_CACHE TILE_PATH TILE_VERSION PLANETILER_BOUNDS
