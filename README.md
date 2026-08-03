@@ -297,8 +297,30 @@ Measured sizes for the `alps` build:
 | `sprites/` + `styles/` | 332 KB | 5 |
 | **Total** | **1.9 GB** | **6,235** |
 
-Storage is $0.015/GB/month, so under $0.03. R2 has no egress fees, leaving Class
-B operations at $0.36/million reads. Total is a few pence a month.
+Storage is $0.015/GB/month, so under $0.03, and R2 has no egress fees. The
+running cost is per-request: R2 Class B operations at $0.36/million, plus
+Cloudflare Workers.
+
+**Workers requests are the figure to watch.** Because the R2 custom domain would
+not yield to a path-scoped route, the Worker owns the hostname and every request
+goes through it — not just tiles, but glyphs, sprites and the style too. The
+free tier is 100k requests/day, and a single map session pulls dozens of tiles
+plus glyph ranges. That is comfortable for current traffic and would not survive
+a busy day at 10× it; check the Workers dashboard before assuming otherwise.
+Beyond the free tier it is $0.30/million, so the exposure is small in absolute
+terms.
+
+The edge cache absorbs most repeat reads before they reach either meter: tiles
+and glyphs are immutable and cache normally. It is the cold, wide-ranging
+sessions that cost.
+
+### The archive is no longer on the hot path
+
+Vector tiles now come from the Worker, which reads byte windows out of the
+archive through the R2 binding. The archive is still served whole at
+`/alps.pmtiles` — `verify.sh` checks its Range behaviour, and it remains the
+thing to point a `pmtiles://` client at — but no browser fetches it during
+normal map use.
 
 ### The archive must be excluded from the Cache Rule
 
