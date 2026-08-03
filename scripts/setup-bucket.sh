@@ -29,9 +29,59 @@ source scripts/config.sh
 wrangler=${WRANGLER:-npx wrangler}
 domain=${TILES_ORIGIN#https://}
 
+# Require a token rather than an interactive login. `wrangler login` needs a TTY
+# to run its OAuth flow and refuses outright when it does not have one, so a
+# script that depends on it works by hand and fails everywhere else. A token is
+# also the same shape as the S3 credentials upload.sh needs — both resolve from
+# 1Password, both work unchanged in CI.
+#
+# Checked here rather than left to wrangler so the failure names the fix once,
+# instead of surfacing three times over as three different command errors.
+if [ -z "${CLOUDFLARE_API_TOKEN:-}" ]; then
+    cat >&2 <<'EOF'
+error: CLOUDFLARE_API_TOKEN is not set
+
+Create one at Cloudflare > Manage Account > Account API Tokens. It needs
+"Workers R2 Storage:Edit" on the account. Attaching the custom domain also
+needs zone edit permission — if the token lacks it, the bucket and CORS steps
+still work and the domain can be attached from the R2 dashboard instead.
+
+An R2 API token created from the R2 page shows both a "Token value" (this
+variable) and an S3 access key pair (what upload.sh uses). They are different
+credentials from the same item.
+
+Then run through 1Password so the value never reaches your shell history:
+
+    op run --env-file=.env.1password -- ./scripts/setup-bucket.sh
+EOF
+    exit 1
+fi
+export CLOUDFLARE_API_TOKEN
+
+# Treat "already exists" as success and anything else as a real failure. A bare
+# `|| echo "already exists"` swallows auth errors, quota errors and typos alike,
+# and reports a bucket that was never created as ready to use.
+run_idempotent() {
+    local label=$1 expected=$2
+    shift 2
+    local output
+    if output=$("$@" 2>&1); then
+        [ -n "$output" ] && printf '%s\n' "$output" | sed 's/^/    /'
+        return 0
+    fi
+    if printf '%s' "$output" | grep -qi "$expected"; then
+        echo "    ${label} already done — continuing"
+        return 0
+    fi
+    printf '%s\n' "$output" >&2
+    echo "error: ${label} failed" >&2
+    exit 1
+}
+
 echo "==> creating bucket ${R2_BUCKET} (location hint ${R2_LOCATION_HINT})"
-$wrangler r2 bucket create "$R2_BUCKET" --location "$R2_LOCATION_HINT" \
-    || echo "    bucket already exists — continuing"
+# shellcheck disable=SC2086 - $wrangler is an intentional multi-word command
+run_idempotent "bucket create" "already exists" \
+    $wrangler r2 bucket create "$R2_BUCKET" --location "$R2_LOCATION_HINT"
 
 echo "==> applying CORS policy from r2-cors.json"
 # If wrangler rejects the file, paste r2-cors.json into the dashboard editor
@@ -53,12 +103,13 @@ EOF
 fi
 
 echo "==> attaching custom domain ${domain}"
-$wrangler r2 bucket domain add "$R2_BUCKET" \
+# shellcheck disable=SC2086 - $wrangler is an intentional multi-word command
+run_idempotent "domain attach" "already \(exists\|attached\|associated\)" \
+    $wrangler r2 bucket domain add "$R2_BUCKET" \
     --domain "$domain" \
     --zone-id "$CLOUDFLARE_ZONE_ID" \
     --min-tls 1.2 \
-    --force \
-    || echo "    domain already attached — continuing"
+    --force
 
 cat <<EOF
 

@@ -136,13 +136,23 @@ dist/
 ## Step 3 — Provision the bucket (once)
 
 ```bash
-CLOUDFLARE_ZONE_ID=... ./scripts/setup-bucket.sh
+op run --env-file=.env.1password -- ./scripts/setup-bucket.sh
 ```
 
-Creates the bucket, applies `r2-cors.json`, and attaches `tiles.snowdesk-data.info`.
-Rerun it after editing the CORS policy. It prints one remaining manual step —
-adding a Cache Rule — because Cloudflare does not cache JSON or unknown
-extensions by default.
+Creates the bucket, applies `r2-cors.json`, and attaches
+`tiles.snowdesk-data.info`. Rerun it after editing the CORS policy. It prints
+one remaining manual step — adding a Cache Rule — because Cloudflare does not
+cache JSON or unknown extensions by default.
+
+Needs `CLOUDFLARE_API_TOKEN`, not `wrangler login`: wrangler's OAuth flow
+requires a TTY and refuses to run without one, so anything depending on it
+breaks outside an interactive shell. `CLOUDFLARE_ZONE_ID` is optional — leave
+it unset while the nameserver transfer is pending and the script will create
+the bucket and CORS policy, then tell you how to attach the domain later.
+
+Attaching the custom domain needs zone edit permission on the token. If yours
+is R2-only, the bucket and CORS steps still succeed and the domain can be
+attached from the R2 dashboard instead.
 
 ## Step 4 — Publish
 
