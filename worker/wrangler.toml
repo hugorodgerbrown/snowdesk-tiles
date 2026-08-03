@@ -1,0 +1,48 @@
+# Worker serving XYZ vector tiles out of the PMTiles archive (SNOW-485).
+#
+# Everything is served from one hostname because the Django CSP derives a single
+# connect-src origin from OPENFREEMAP_STYLE_URL; a second hostname would need a
+# Django change and reintroduce the drift that derivation prevents.
+#
+# The Worker owns that hostname and serves bucket objects itself for
+# non-tile paths. A path-scoped route alongside the R2 custom domain was tried
+# first and does not work: Cloudflare's "routes take precedence if configured on
+# the same hostname" does not hold against an *R2* custom domain, and /tiles/*
+# was answered by R2's own 404 page without ever reaching the Worker.
+#
+# DEPLOY ORDER MATTERS. The R2 custom domain must be removed from the bucket
+# first, or it keeps winning and this Worker is never invoked:
+#
+#   1. R2 > snowdesk-tiles > Settings > Custom Domains > remove
+#      tiles.snowdesk-data.info
+#   2. cd worker && npm install && npx wrangler deploy
+#
+# Removing the custom domain also removes its DNS record, so the custom_domain
+# route below recreates it pointing at the Worker.
+
+name = "snowdesk-tiles"
+main = "src/index.js"
+compatibility_date = "2026-08-01"
+
+# custom_domain rather than a path route: it creates and owns the DNS record,
+# which is what makes the Worker — not the bucket — the origin for this hostname.
+[[routes]]
+pattern = "tiles.snowdesk-data.info"
+custom_domain = true
+
+# Range reads into the archive go through the binding rather than back out over
+# HTTP: no egress, no public-URL round trip, and it works regardless of the
+# bucket's public access settings.
+[[r2_buckets]]
+binding = "BUCKET"
+bucket_name = "snowdesk-tiles"
+
+[vars]
+# Keep in step with PMTILES_NAME in scripts/config.sh.
+PMTILES_KEY = "snowdesk.pmtiles"
+# The only CORS allowlist there is — the bucket has no custom domain, so its own
+# policy never applies. The staging origin was in the original Caddyfile list and
+# was lost in the move to R2; a cross-origin failure there looks like an outage
+# from the app side, not a config gap. 127.0.0.1 is listed alongside localhost
+# because a browser treats them as distinct origins.
+ALLOWED_ORIGINS = "https://snowdesk.info https://www.snowdesk.info https://snowdesk-staging.onrender.com http://localhost:8000 http://127.0.0.1:8000"
