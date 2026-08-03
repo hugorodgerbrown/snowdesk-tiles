@@ -14,10 +14,17 @@
 // R2. Individual tiles are a few kB, cache normally, and are served from the
 // edge on repeat reads.
 //
-// Routed at /tiles/* on the same hostname as the style, deliberately: the Django
-// CSP derives a single connect-src origin from OPENFREEMAP_STYLE_URL, so tiles
-// served from a second hostname would need a Django change and reintroduce the
-// drift that derivation exists to prevent.
+// This Worker owns the whole hostname and serves bucket objects itself for every
+// non-tile path. That is not the original design: the first attempt kept the R2
+// custom domain and routed only /tiles/* here, on the strength of Cloudflare's
+// documented "routes take precedence if configured on the same hostname". They
+// do not take precedence over an *R2* custom domain — /tiles/* was answered by
+// R2's own 404 page and never reached the Worker at all.
+//
+// One hostname is non-negotiable rather than tidiness: the Django CSP derives a
+// single connect-src origin from OPENFREEMAP_STYLE_URL, so tiles on a second
+// hostname would need a Django change and reintroduce the drift that derivation
+// exists to prevent.
 
 import { PMTiles } from "pmtiles";
 
@@ -102,6 +109,51 @@ async function tileJson(archive, request, env) {
   };
 }
 
+/**
+ * Serve a bucket object for any path that is not a tile.
+ *
+ * Content-Type and Cache-Control come from the object's stored metadata, which
+ * upload.sh set per asset class — R2 infers neither, so this is the only place
+ * they exist. Range is honoured so the raw archive stays readable by byte
+ * window for anything that wants it.
+ */
+async function serveObject(request, env, cors) {
+  const url = new URL(request.url);
+  // Object keys are the decoded path: "fonts/Noto Sans Regular/0-255.pbf" is
+  // requested as fonts/Noto%20Sans%20Regular/...
+  const key = decodeURIComponent(url.pathname.slice(1));
+  if (!key) return new Response("not found", { status: 404, headers: cors });
+
+  const range = request.headers.get("Range");
+  const match = range && /^bytes=(\d+)-(\d*)$/.exec(range);
+  const options = {};
+  if (match) {
+    const offset = Number(match[1]);
+    options.range = match[2]
+      ? { offset, length: Number(match[2]) - offset + 1 }
+      : { offset };
+  }
+
+  const object = await env.BUCKET.get(key, options);
+  if (!object) return new Response("not found", { status: 404, headers: cors });
+
+  const headers = {
+    ...cors,
+    "Content-Type": object.httpMetadata?.contentType ?? "application/octet-stream",
+    "Cache-Control": object.httpMetadata?.cacheControl ?? "public, max-age=3600",
+    "Accept-Ranges": "bytes",
+    ETag: object.httpEtag,
+  };
+
+  if (object.range && match) {
+    const start = object.range.offset ?? 0;
+    const end = start + (object.range.length ?? object.size) - 1;
+    headers["Content-Range"] = `bytes ${start}-${end}/${object.size}`;
+    return new Response(object.body, { status: 206, headers });
+  }
+  return new Response(object.body, { headers });
+}
+
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
@@ -115,10 +167,22 @@ export default {
     }
 
     // Serve from the edge cache before touching R2. Tiles are immutable, so a
-    // hit here is free and keeps Class B operations down.
+    // hit here is free and keeps Class B operations down. Range requests are
+    // excluded: the Cache API keys on URL, so a cached full response would be
+    // served for a byte-window request — the same class of bug the Cache Rule
+    // caused when it stripped Range from the archive.
     const cache = caches.default;
-    const cached = await cache.match(request);
-    if (cached) return cached;
+    const cacheable = !request.headers.get("Range");
+    if (cacheable) {
+      const cached = await cache.match(request);
+      if (cached) return cached;
+    }
+
+    // Everything outside /tiles/ is a bucket object. This Worker owns the whole
+    // hostname, so it has to serve them; see the header comment for why.
+    if (!url.pathname.startsWith("/tiles/")) {
+      return serveObject(request, env, cors);
+    }
 
     const archive = new PMTiles(new R2Source(env.BUCKET, env.PMTILES_KEY));
 
@@ -155,10 +219,9 @@ export default {
       }
     }
 
-    // Only cache responses that vary by nothing but the URL. With an Origin
-    // echo in play the entry is keyed by the request, and Vary: Origin above
-    // keeps a cross-origin response from being served to a different site.
-    ctx.waitUntil(cache.put(request, response.clone()));
+    // Vary: Origin above keeps a cross-origin response from being handed to a
+    // different site out of the cache.
+    if (cacheable) ctx.waitUntil(cache.put(request, response.clone()));
     return response;
   },
 };

@@ -182,15 +182,29 @@ attached from the R2 dashboard instead.
 cd worker && npm install && npx wrangler deploy
 ```
 
-Needs a token with Workers edit permission — the R2 object token used for
-uploads is not enough. Route and bucket binding are in `worker/wrangler.toml`;
-`PMTILES_KEY` there must match `PMTILES_NAME` in `scripts/config.sh`, and the
-route path must match `TILE_PATH`.
+**Remove the R2 custom domain first** (R2 → `snowdesk-tiles` → Settings →
+Custom Domains). Otherwise it keeps answering and the Worker is never invoked —
+see below. Deploying recreates the DNS record pointing at the Worker.
 
-The route is scoped to `/tiles/*` so the bucket keeps serving everything else on
-the same hostname. Cloudflare routes take precedence over a custom domain on the
-same hostname; if that does not hold in practice, widen the route to `/*` and
-add a passthrough to `env.BUCKET` for non-tile paths.
+Needs a token with Workers edit permission; the R2 object token used for uploads
+is not enough. `PMTILES_KEY` in `worker/wrangler.toml` must match `PMTILES_NAME`
+in `scripts/config.sh`, and the tile route must match `TILE_PATH`.
+
+### Why the Worker serves the bucket objects too
+
+The obvious arrangement — keep the R2 custom domain, route only `/tiles/*` to
+the Worker — does not work. Cloudflare documents that routes "take precedence if
+configured on the same hostname", but that does not hold against an *R2* custom
+domain: `/tiles/0/0/0.mvt` was answered by R2's own 404 page and never reached
+the Worker.
+
+So the Worker owns the hostname and passes non-tile paths through to the bucket
+binding, returning each object's stored `Content-Type` and `Cache-Control`. Those
+still come from what `upload.sh` set — R2 infers neither, and the Worker does not
+override them.
+
+Splitting across two hostnames would avoid this, and is the one option ruled out:
+the CSP derives a single origin from `OPENFREEMAP_STYLE_URL`.
 
 ## Step 4 — Publish
 
