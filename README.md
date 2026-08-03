@@ -124,12 +124,22 @@ elsewhere and uploads in. OpenFreeMap publishes only `planet` and `monaco`, so
 there is no smaller prebuilt file to convert as a way round it — and their planet
 is 101 GB of MBTiles, needing the same class of machine to convert anyway.
 
-**Recommended: Hetzner Cloud CPX41** — 8 vCPU, 16 GB RAM, 240 GB NVMe, about
-€0.05/hour in Falkenstein or Nuremberg. Geofabrik is hosted in Germany, so the
-28 GB source download runs at line speed, and hourly billing means the whole job
-costs about €0.10. AWS and DigitalOcean equivalents cost several times more and
-give less disk. CCX33 (dedicated vCPU, 32 GB RAM) is the upgrade if you want it
-finished sooner.
+**What the machine needs:** ~160 GB disk, 16 GB RAM, 8 vCPU. Disk is the binding
+constraint — the source, planetiler's working files and the output have to
+coexist.
+
+**Recommended: Hetzner Cloud CX42** — 8 vCPU, 16 GB RAM, 160 GB NVMe, €0.0273
+per hour. Falkenstein or Nuremberg, because Geofabrik is hosted in Germany and
+the 28 GB source then downloads at line speed. CX52 (16 vCPU, 32 GB, 320 GB,
+€0.054/hour) if you want it finished sooner or CX42 has no capacity.
+
+Note the **hourly** rate. Hetzner advertises monthly prices — €16.40 for CX42,
+€32.40 for CX52 — but bills by the hour, so a two-hour build costs about six
+cents, not forty euros. Destroy the server when it finishes and that is all you
+pay.
+
+Other providers work; they cost several times more for the same disk. Anything
+with 160 GB and 16 GB RAM will do.
 
 #### From scratch
 
