@@ -242,8 +242,18 @@ that the only thing the style rewrite has to change is the hostname:
   without it the basemap 404s when zoomed out.
 - **The style itself**, rewritten by `rewrite_style.py` to point every sprite,
   glyph, raster and vector URL at `TILES_ORIGIN`, with the vector source given
-  an XYZ `tiles` array pointing at `$TILES_ORIGIN/$TILE_PATH`. The script exits
-  non-zero if any upstream reference survives.
+  an XYZ `tiles` array pointing at `$TILES_ORIGIN/$TILE_PATH` and the archive's
+  zoom range (`TILE_MIN_ZOOM` / `TILE_MAX_ZOOM`). The script exits non-zero if
+  any upstream reference survives.
+
+  The zoom range has to be stated because the rewrite drops the upstream `url`,
+  and that TileJSON is where it used to come from. A vector source with no
+  `maxzoom` defaults to 22 in MapLibre, so the client requests z15+ tiles the
+  archive does not hold — the Worker answers 204 — instead of overzooming z14,
+  and every basemap layer disappears above z14. It also breaks Snowdesk's
+  offline area downloads, which pin z10-14 and rely on overzoom below that.
+  Keep the two values in step with the archive; `verify.sh` checks the published
+  style against the Worker's TileJSON, which reads the PMTiles header.
 
 Resulting tree, which is also the object layout of the bucket:
 

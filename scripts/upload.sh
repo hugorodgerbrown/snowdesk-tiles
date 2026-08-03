@@ -65,30 +65,44 @@ fi
 # at must already be live before the style itself is published; otherwise a
 # client that fetches the new style mid-upload gets a 404 on the tiles.
 
+# A style-only publish is a real workflow — the style changes whenever the
+# origin, the tile path or the zoom range moves, none of which touch the mirror.
+# `aws s3 sync` errors on a missing local source, so an unstaged directory would
+# abort the run rather than skip it, and the fix would be re-downloading ~1 GB of
+# assets that are already published and unchanged. Absent means "not rebuilt",
+# never "delete it" — nothing here syncs with `--delete`.
+mirrored() {
+    if [ -d "${DIST_DIR}/$1" ]; then
+        return 0
+    fi
+    echo "    none staged — leaving the published ${1} as they are"
+    return 1
+}
+
 echo "==> glyphs"
-s3 sync "${DIST_DIR}/fonts" "s3://${R2_BUCKET}/fonts" \
-    --content-type application/x-protobuf \
-    --cache-control "$IMMUTABLE_CACHE"
+if mirrored fonts; then
+    s3 sync "${DIST_DIR}/fonts" "s3://${R2_BUCKET}/fonts" \
+        --content-type application/x-protobuf \
+        --cache-control "$IMMUTABLE_CACHE"
+fi
 
-echo "==> sprite atlases"
-s3 sync "${DIST_DIR}/sprites" "s3://${R2_BUCKET}/sprites" \
-    --exclude '*' --include '*.png' \
-    --content-type image/png \
-    --cache-control "$IMMUTABLE_CACHE"
-
-echo "==> sprite indexes"
-s3 sync "${DIST_DIR}/sprites" "s3://${R2_BUCKET}/sprites" \
-    --exclude '*' --include '*.json' \
-    --content-type application/json \
-    --cache-control "$IMMUTABLE_CACHE"
+echo "==> sprite atlases and indexes"
+if mirrored sprites; then
+    s3 sync "${DIST_DIR}/sprites" "s3://${R2_BUCKET}/sprites" \
+        --exclude '*' --include '*.png' \
+        --content-type image/png \
+        --cache-control "$IMMUTABLE_CACHE"
+    s3 sync "${DIST_DIR}/sprites" "s3://${R2_BUCKET}/sprites" \
+        --exclude '*' --include '*.json' \
+        --content-type application/json \
+        --cache-control "$IMMUTABLE_CACHE"
+fi
 
 echo "==> natural earth raster tiles"
-if [ -d "${DIST_DIR}/natural_earth" ]; then
+if mirrored natural_earth; then
     s3 sync "${DIST_DIR}/natural_earth" "s3://${R2_BUCKET}/natural_earth" \
         --content-type image/png \
         --cache-control "$IMMUTABLE_CACHE"
-else
-    echo "    none staged — the style's raster source will 404 at low zoom" >&2
 fi
 
 echo "==> vector tiles (${PMTILES_NAME}, multipart)"

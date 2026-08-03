@@ -52,6 +52,21 @@ if [ -z "${TILE_PATH:-}" ]; then
     TILE_PATH="tiles/${TILE_VERSION}/{z}/{x}/{y}.mvt"
 fi
 
+# Zoom range the archive holds, written into the style's vector source.
+#
+# Not cosmetic. Upstream carries this in the TileJSON its `url` points at, and
+# the rewrite drops `url` in favour of a `tiles` template — so if the style does
+# not state the range, MapLibre assumes maxzoom 22, asks for z15+ tiles that do
+# not exist, and renders nothing above z14 instead of overzooming.
+#
+# Keep in step with the archive: build-extract.sh takes planetiler's default
+# maximum of 14. The live values are readable from the Worker's TileJSON, which
+# derives them from the PMTiles header:
+#
+#     curl -s "${TILES_ORIGIN}/tiles/${TILE_VERSION}/tiles.json"
+: "${TILE_MIN_ZOOM:=0}"
+: "${TILE_MAX_ZOOM:=14}"
+
 # Upstream OpenFreeMap origin the assets are mirrored from.
 : "${UPSTREAM_ORIGIN:=https://tiles.openfreemap.org}"
 : "${UPSTREAM_STYLE_URL:=${UPSTREAM_ORIGIN}/styles/liberty}"
@@ -68,3 +83,4 @@ fi
 export TILES_ORIGIN R2_BUCKET PMTILES_NAME PLANETILER_AREA PLANETILER_VERSION
 export PLANETILER_MEMORY UPSTREAM_ORIGIN UPSTREAM_STYLE_URL DIST_DIR
 export IMMUTABLE_CACHE STYLE_CACHE TILE_PATH TILE_VERSION PLANETILER_BOUNDS
+export TILE_MIN_ZOOM TILE_MAX_ZOOM

@@ -32,6 +32,16 @@ UPSTREAM_STYLE_URL = os.environ.get(
     "UPSTREAM_STYLE_URL", f"{UPSTREAM_ORIGIN}/styles/liberty"
 )
 
+# The zoom range the archive actually holds. Must be written into the style
+# explicitly — see ``rewrite``'s docstring for why dropping ``url`` makes these
+# mandatory. Defaults match what ``build-extract.sh`` produces (planetiler's
+# own default maximum); the archive's TileJSON, which the Worker derives from
+# the PMTiles header, is the authority to check them against:
+#
+#     curl -s https://tiles.snowdesk-data.info/tiles/v1/tiles.json
+DEFAULT_MIN_ZOOM = 0
+DEFAULT_MAX_ZOOM = 14
+
 
 def load_style(source: str) -> dict[str, Any]:
     """Return the style JSON, fetched over HTTP or read from a local path."""
@@ -48,12 +58,19 @@ def load_style(source: str) -> dict[str, Any]:
     return from_file
 
 
-def rewrite(style: dict[str, Any], origin: str, tile_path: str) -> dict[str, Any]:
+def rewrite(
+    style: dict[str, Any],
+    origin: str,
+    tile_path: str,
+    min_zoom: int = DEFAULT_MIN_ZOOM,
+    max_zoom: int = DEFAULT_MAX_ZOOM,
+) -> dict[str, Any]:
     """Repoint every upstream URL at ``origin`` and tiles at ``tile_path``.
 
     Every ``tiles.openfreemap.org`` occurrence (sprite, glyphs, and any stray
     reference) is swapped for ``origin``; each vector source is rewritten to an
-    XYZ ``tiles`` template served by the Worker.
+    XYZ ``tiles`` template served by the Worker, carrying the archive's own
+    ``[min_zoom, max_zoom]`` range.
 
     An earlier revision emitted ``pmtiles://`` here so MapLibre could range-read
     the archive directly. That needs the client to register the PMTiles protocol,
@@ -62,6 +79,15 @@ def rewrite(style: dict[str, Any], origin: str, tile_path: str) -> dict[str, Any
     and SNOW-484's service worker pins basemap URLs for offline use, and neither
     can express range reads into one 1.5 GB object. A plain ``tiles`` array keeps
     this style shaped like every other basemap in the catalogue.
+
+    Writing the zoom range is not optional, and is the whole reason these
+    arguments exist. Upstream carries it in the TileJSON that ``url`` points at,
+    so dropping ``url`` drops it too — and a vector source with no ``maxzoom``
+    defaults to 22 in MapLibre. The client then requests z15+ tiles the archive
+    does not hold (the Worker answers 204) instead of overzooming z14, so every
+    basemap layer vanishes above z14: no roads, no labels, no terrain. That also
+    breaks Snowdesk's offline area downloads, which pin z10-14 and rely on
+    overzoom for anything closer in.
 
     Raises if no vector source is found — that would mean the upstream style
     shape changed and the rewrite is no longer safe to trust.
@@ -91,6 +117,9 @@ def rewrite(style: dict[str, Any], origin: str, tile_path: str) -> dict[str, Any
         # ambiguous, and MapLibre would fetch the former to discover the latter.
         spec.pop("url", None)
         spec["tiles"] = [template]
+        # Replaces what the dropped TileJSON used to supply — see the docstring.
+        spec["minzoom"] = min_zoom
+        spec["maxzoom"] = max_zoom
 
     return rewritten
 
@@ -116,10 +145,24 @@ def main(argv: list[str] | None = None) -> int:
             "(default: tiles/{z}/{x}/{y}.mvt)"
         ),
     )
+    parser.add_argument(
+        "--min-zoom",
+        type=int,
+        default=DEFAULT_MIN_ZOOM,
+        help=f"shallowest zoom in the archive (default: {DEFAULT_MIN_ZOOM})",
+    )
+    parser.add_argument(
+        "--max-zoom",
+        type=int,
+        default=DEFAULT_MAX_ZOOM,
+        help=f"deepest zoom in the archive (default: {DEFAULT_MAX_ZOOM})",
+    )
     args = parser.parse_args(argv)
 
     style = load_style(args.source)
-    rewritten = rewrite(style, args.origin, args.tile_path)
+    rewritten = rewrite(
+        style, args.origin, args.tile_path, args.min_zoom, args.max_zoom
+    )
     json.dump(rewritten, sys.stdout, indent=2)
     sys.stdout.write("\n")
 
