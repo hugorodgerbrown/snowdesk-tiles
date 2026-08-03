@@ -43,6 +43,16 @@ const TILEJSON_CACHE_CONTROL = "public, max-age=3600";
 const TILE_PATH = /^\/tiles\/[^/]+\/(\d+)\/(\d+)\/(\d+)\.(mvt|pbf)$/;
 const TILEJSON_PATH = /^\/tiles\/[^/]+\/tiles\.json$/;
 
+// Unversioned paths, from before TILE_VERSION existed. Kept so deploying this
+// Worker does not 404 clients still holding the previous style: that style is
+// cached for an hour at the edge and in browsers, so it outlives the upload of
+// its replacement. The two shapes cannot collide — versioned has four segments
+// after /tiles/, unversioned three.
+//
+// Safe to delete once no request has arrived for them in a day or so.
+const LEGACY_TILE_PATH = /^\/tiles\/(\d+)\/(\d+)\/(\d+)\.(mvt|pbf)$/;
+const LEGACY_TILEJSON_PATH = /^\/tiles\/tiles\.json$/;
+
 /**
  * Reads byte ranges out of the archive through the R2 binding.
  *
@@ -126,11 +136,16 @@ async function tileJson(archive, request, env) {
   const url = new URL(request.url);
   // Advertise tiles under the same version the TileJSON was fetched with, so a
   // client following it stays on one set of URLs.
-  const version = url.pathname.split("/")[2];
+  const segments = url.pathname.split("/");
+  const version = segments.length > 3 ? segments[2] : null;
 
   return {
     tilejson: "3.0.0",
-    tiles: [`${url.origin}/tiles/${version}/{z}/{x}/{y}.mvt`],
+    tiles: [
+      version
+        ? `${url.origin}/tiles/${version}/{z}/{x}/{y}.mvt`
+        : `${url.origin}/tiles/{z}/{x}/{y}.mvt`,
+    ],
     minzoom: header.minZoom,
     maxzoom: header.maxZoom,
     bounds: [
@@ -222,12 +237,13 @@ export default {
     const archive = new PMTiles(new R2Source(env.BUCKET, env.PMTILES_KEY));
 
     let response;
-    if (TILEJSON_PATH.test(url.pathname)) {
+    if (TILEJSON_PATH.test(url.pathname) || LEGACY_TILEJSON_PATH.test(url.pathname)) {
       response = Response.json(await tileJson(archive, request, env), {
         headers: { "Cache-Control": TILEJSON_CACHE_CONTROL },
       });
     } else {
-      const match = TILE_PATH.exec(url.pathname);
+      const match =
+        TILE_PATH.exec(url.pathname) ?? LEGACY_TILE_PATH.exec(url.pathname);
       if (!match) {
         return new Response("not found", { status: 404, headers: cors });
       }
