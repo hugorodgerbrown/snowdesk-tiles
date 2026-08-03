@@ -41,6 +41,8 @@ mkdir -p "${DIST_DIR}/styles"
 "$python" scripts/rewrite_style.py \
     --origin "$TILES_ORIGIN" \
     --tile-path "$TILE_PATH" \
+    --min-zoom "$TILE_MIN_ZOOM" \
+    --max-zoom "$TILE_MAX_ZOOM" \
     >"${DIST_DIR}/styles/liberty.tmp"
 mv "${DIST_DIR}/styles/liberty.tmp" "${DIST_DIR}/styles/liberty"
 

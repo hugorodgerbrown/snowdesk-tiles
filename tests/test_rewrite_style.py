@@ -52,6 +52,24 @@ def test_vector_source_uses_an_xyz_template() -> None:
     assert "url" not in source
 
 
+def test_vector_source_states_the_archive_zoom_range() -> None:
+    # The dropped `url` used to carry this in its TileJSON. Without it MapLibre
+    # defaults maxzoom to 22, requests z15+ tiles the archive does not hold, and
+    # renders nothing above z14 rather than overzooming.
+    result = rewrite(style(), ORIGIN, TILE_PATH)
+    source = result["sources"]["openmaptiles"]
+
+    assert source["minzoom"] == 0
+    assert source["maxzoom"] == 14
+
+
+def test_zoom_range_is_overridable() -> None:
+    result = rewrite(style(), ORIGIN, TILE_PATH, min_zoom=4, max_zoom=12)
+    source = result["sources"]["openmaptiles"]
+
+    assert (source["minzoom"], source["maxzoom"]) == (4, 12)
+
+
 def test_trailing_slash_on_origin_is_dropped() -> None:
     result = rewrite(style(), f"{ORIGIN}/", TILE_PATH)
 

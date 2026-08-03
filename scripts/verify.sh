@@ -71,6 +71,35 @@ check "vector tile is protobuf" "application/x-protobuf" \
 check "tilejson responds" 200 \
     "$(status "${TILES_ORIGIN}/tiles/${TILE_VERSION}/tiles.json")"
 
+# The style must state the vector source's zoom range, and state it correctly.
+# The rewrite drops the upstream `url` that used to carry it in TileJSON, and a
+# vector source with no maxzoom defaults to 22 in MapLibre: the client then asks
+# for z15+ tiles the archive does not hold (204, empty) instead of overzooming
+# z14, and every basemap layer disappears above z14. Nothing else in this suite
+# notices — the whole thing passed while the map rendered blank when zoomed in.
+#
+# Compared against the archive's own header via the Worker's TileJSON rather
+# than against config.sh, so a rebuild that changes the range and a style that
+# was not rebuilt with it cannot agree by accident.
+#
+# Parsed with python3 rather than sed: the vector source's own tiles template
+# contains `{z}/{x}/{y}`, so any attempt to slice its JSON object on braces
+# stops inside the URL. Every other script here already needs an interpreter.
+zoom_range() {
+    python3 -c '
+import json, sys
+doc = json.load(sys.stdin)
+source = doc.get("sources", {}).get(sys.argv[1], doc) if sys.argv[1] else doc
+print(source.get("minzoom", "<unset>"), source.get("maxzoom", "<unset>"))
+' "$1" 2>/dev/null || echo "<unreadable> <unreadable>"
+}
+
+read -r want_min want_max < <(curl -s "${TILES_ORIGIN}/tiles/${TILE_VERSION}/tiles.json" | zoom_range "")
+read -r got_min got_max < <(curl -s "${TILES_ORIGIN}/styles/liberty" | zoom_range openmaptiles)
+
+check "style declares vector minzoom" "$want_min" "$got_min"
+check "style declares vector maxzoom" "$want_max" "$got_max"
+
 # Coverage, at named places rather than in the abstract. A regional extract is
 # clipped to a polygon, not a bounding box, so tiles are served across the whole
 # bbox and are simply empty outside it — every status check passes while parts
