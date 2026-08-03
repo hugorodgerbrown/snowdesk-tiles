@@ -27,7 +27,10 @@ status() { curl -so /dev/null -w '%{http_code}' "$@"; }
 # -I so this stays a HEAD request. Without it, checking the content type of the
 # archive downloads 1.5 GB to read one response header.
 content_type() { curl -sI -o /dev/null -w '%{content_type}' "$@"; }
-header() { curl -sI "$1" | tr -d '\r' | grep -i "^$2:" | cut -d' ' -f2- | tail -1; }
+# `|| true` is load-bearing: grep exits 1 when the header is absent, and under
+# `set -o pipefail` that kills the whole script — silently, before the summary,
+# so a clean run reports failure.
+header() { curl -sI "$1" | tr -d '\r' | grep -i "^$2:" | cut -d' ' -f2- | tail -1 || true; }
 
 echo "==> ${TILES_ORIGIN}"
 
@@ -143,23 +146,12 @@ for site in $allowed; do
     check "CORS allows ${site}" "$site" "${acao:-<none>}"
 done
 
-# Not a failure — the origin is correct either way — but DYNAMIC means the edge
-# is not caching, so every glyph and style read goes to R2. Cloudflare caches
-# .png by extension and nothing else here, so this is the signal that the Cache
-# Rule setup-bucket.sh describes has not been added.
-echo
-for path in "/styles/liberty" "/fonts/Noto%20Sans%20Regular/0-255.pbf"; do
-    cache_status=$(header "${TILES_ORIGIN}${path}" "cf-cache-status")
-    case "$cache_status" in
-        HIT | MISS | EXPIRED | REVALIDATED)
-            printf '  ok    edge-cached (%s): %s\n' "$cache_status" "$path"
-            ;;
-        *)
-            printf '  warn  not edge-cached (%s): %s\n' "${cache_status:-none}" "$path"
-            printf '        add the Cache Rule — see scripts/setup-bucket.sh\n'
-            ;;
-    esac
-done
+# Edge-cache status is no longer checked here. It used to read cf-cache-status
+# to confirm the zone Cache Rule was working, back when the bucket served these
+# paths over its own custom domain. The Worker now serves everything and does
+# its own caching through the Cache API, and Cloudflare does not stamp
+# cf-cache-status on Worker responses — the header is simply absent, so the
+# check could only ever have warned.
 
 echo
 if [ "$failures" -gt 0 ]; then
