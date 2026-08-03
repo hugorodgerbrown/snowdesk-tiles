@@ -69,9 +69,26 @@ else
 fi
 
 echo "==> vector tiles (${PMTILES_NAME}, multipart)"
-s3 cp "${DIST_DIR}/${PMTILES_NAME}" "s3://${R2_BUCKET}/${PMTILES_NAME}" \
-    --content-type application/octet-stream \
-    --cache-control "$IMMUTABLE_CACHE"
+# `cp` always re-uploads, and the archive is 1.5 GB. It changes only when the
+# extract is rebuilt, whereas the style changes whenever the origin or tile path
+# moves — so a style-only publish would otherwise push the whole archive again
+# for nothing. Compare sizes and skip when they match; FORCE_ARCHIVE=1 overrides
+# (a rebuild that happens to land on the same byte count is possible, if
+# unlikely).
+local_size=$(wc -c <"${DIST_DIR}/${PMTILES_NAME}" | tr -d ' ')
+remote_size=$(aws s3api head-object \
+    --endpoint-url "$R2_ENDPOINT" \
+    --bucket "$R2_BUCKET" \
+    --key "$PMTILES_NAME" \
+    --query ContentLength --output text 2>/dev/null || echo "")
+
+if [ "${FORCE_ARCHIVE:-0}" != "1" ] && [ "$local_size" = "$remote_size" ]; then
+    echo "    unchanged (${local_size} bytes) — skipping; FORCE_ARCHIVE=1 to override"
+else
+    s3 cp "${DIST_DIR}/${PMTILES_NAME}" "s3://${R2_BUCKET}/${PMTILES_NAME}" \
+        --content-type application/octet-stream \
+        --cache-control "$IMMUTABLE_CACHE"
+fi
 
 echo "==> style (published last)"
 s3 cp "${DIST_DIR}/styles/liberty" "s3://${R2_BUCKET}/styles/liberty" \
