@@ -124,17 +124,27 @@ check "archive is binary" "application/octet-stream" \
 check "raster is png" "image/png" \
     "$(content_type "${TILES_ORIGIN}/natural_earth/ne2sr/0/0/0.png")"
 
-# CORS must be a wildcard with no Vary. Echoing the Origin and sending
-# `Vary: Origin` broke the app's offline basemap cache: the Cache API honours
-# Vary on lookup, and the app matches with a constructed Request that has no
-# Origin header, so nothing stored under Vary: Origin could ever be found again.
-# Downloads failed with no console error because nothing threw — the lookup
-# missed. Assert the shape rather than a list of origins.
-acao=$(header "${TILES_ORIGIN}/tiles/${TILE_VERSION}/0/0/0.mvt" "access-control-allow-origin")
-check "CORS is a wildcard" "*" "${acao:-<none>}"
+# CORS is what actually breaks in production: a working origin the browser
+# refuses to read cross-origin looks identical to an outage from the app side.
+#
+# Every origin in the allowlist is checked, not just one. Checking a single
+# origin is what let the staging origin go missing in the move off Caddy — the
+# suite passed while snowdesk-staging.onrender.com was blocked, and it surfaced
+# in a browser instead.
+#
+# The list is read out of worker/wrangler.toml rather than restated here: it is
+# the only live copy, and a second one would drift the same way.
+allowed=$(sed -n 's/^ALLOWED_ORIGINS *= *"\(.*\)"/\1/p' worker/wrangler.toml)
+if [ -z "$allowed" ]; then
+    echo "  FAIL  could not read ALLOWED_ORIGINS from worker/wrangler.toml"
+    failures=$((failures + 1))
+fi
 
-vary=$(header "${TILES_ORIGIN}/tiles/${TILE_VERSION}/0/0/0.mvt" "vary")
-check "no Vary on tiles" "" "$vary"
+for site in $allowed; do
+    acao=$(curl -sI -H "Origin: ${site}" "${TILES_ORIGIN}/tiles/${TILE_VERSION}/0/0/0.mvt" \
+        | tr -d '\r' | grep -i '^access-control-allow-origin:' | cut -d' ' -f2-)
+    check "CORS allows ${site}" "$site" "${acao:-<none>}"
+done
 
 # Edge-cache status is no longer checked here. It used to read cf-cache-status
 # to confirm the zone Cache Rule was working, back when the bucket served these
