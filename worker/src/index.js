@@ -71,9 +71,35 @@ function corsHeaders(request, allowedOrigins) {
   return {
     "Access-Control-Allow-Origin": origin,
     "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS",
+    // Range and the 206 metadata: needed by anything reading the archive
+    // directly, and by SNOW-484's service worker to validate a cross-origin
+    // partial response.
+    "Access-Control-Allow-Headers": "Range",
+    "Access-Control-Expose-Headers": "Content-Range, Accept-Ranges, Content-Length",
     "Access-Control-Max-Age": "86400",
     Vary: "Origin",
   };
+}
+
+/**
+ * Attach CORS headers to a response on its way out.
+ *
+ * Applied *after* the cache lookup, never before it. The Cache API keys on URL,
+ * and a response stored from a request carrying no Origin has no
+ * `Vary: Origin` to key on — so that entry would later be handed to a
+ * cross-origin request with no Access-Control-Allow-Origin, and the browser
+ * would block a resource the origin is entitled to. Storing responses clean and
+ * deciding CORS per request keeps the cache entry origin-independent.
+ */
+function withCors(response, cors) {
+  if (!Object.keys(cors).length) return response;
+  const headers = new Headers(response.headers);
+  for (const [name, value] of Object.entries(cors)) headers.set(name, value);
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
 }
 
 function allowedOriginList(env) {
@@ -117,12 +143,12 @@ async function tileJson(archive, request, env) {
  * they exist. Range is honoured so the raw archive stays readable by byte
  * window for anything that wants it.
  */
-async function serveObject(request, env, cors) {
+async function serveObject(request, env) {
   const url = new URL(request.url);
   // Object keys are the decoded path: "fonts/Noto Sans Regular/0-255.pbf" is
   // requested as fonts/Noto%20Sans%20Regular/...
   const key = decodeURIComponent(url.pathname.slice(1));
-  if (!key) return new Response("not found", { status: 404, headers: cors });
+  if (!key) return new Response("not found", { status: 404 });
 
   const range = request.headers.get("Range");
   const match = range && /^bytes=(\d+)-(\d*)$/.exec(range);
@@ -135,10 +161,9 @@ async function serveObject(request, env, cors) {
   }
 
   const object = await env.BUCKET.get(key, options);
-  if (!object) return new Response("not found", { status: 404, headers: cors });
+  if (!object) return new Response("not found", { status: 404 });
 
   const headers = {
-    ...cors,
     "Content-Type": object.httpMetadata?.contentType ?? "application/octet-stream",
     "Cache-Control": object.httpMetadata?.cacheControl ?? "public, max-age=3600",
     "Accept-Ranges": "bytes",
@@ -175,13 +200,13 @@ export default {
     const cacheable = !request.headers.get("Range");
     if (cacheable) {
       const cached = await cache.match(request);
-      if (cached) return cached;
+      if (cached) return withCors(cached, cors);
     }
 
     // Everything outside /tiles/ is a bucket object. This Worker owns the whole
     // hostname, so it has to serve them; see the header comment for why.
     if (!url.pathname.startsWith("/tiles/")) {
-      return serveObject(request, env, cors);
+      return withCors(await serveObject(request, env), cors);
     }
 
     const archive = new PMTiles(new R2Source(env.BUCKET, env.PMTILES_KEY));
@@ -189,7 +214,7 @@ export default {
     let response;
     if (url.pathname === "/tiles/tiles.json") {
       response = Response.json(await tileJson(archive, request, env), {
-        headers: { ...cors, "Cache-Control": TILEJSON_CACHE_CONTROL },
+        headers: { "Cache-Control": TILEJSON_CACHE_CONTROL },
       });
     } else {
       const match = TILE_PATH.exec(url.pathname);
@@ -206,12 +231,11 @@ export default {
       if (!tile || !tile.data) {
         response = new Response(null, {
           status: 204,
-          headers: { ...cors, "Cache-Control": TILE_CACHE_CONTROL },
+          headers: { "Cache-Control": TILE_CACHE_CONTROL },
         });
       } else {
         response = new Response(tile.data, {
           headers: {
-            ...cors,
             "Content-Type": "application/x-protobuf",
             "Cache-Control": TILE_CACHE_CONTROL,
           },
@@ -219,9 +243,9 @@ export default {
       }
     }
 
-    // Vary: Origin above keeps a cross-origin response from being handed to a
-    // different site out of the cache.
+    // Cache the response *without* CORS headers, then decide CORS per request.
+    // See withCors for why storing them would poison the entry.
     if (cacheable) ctx.waitUntil(cache.put(request, response.clone()));
-    return response;
+    return withCors(response, cors);
   },
 };

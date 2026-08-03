@@ -80,13 +80,27 @@ check "archive is binary" "application/octet-stream" \
 check "raster is png" "image/png" \
     "$(content_type "${TILES_ORIGIN}/natural_earth/ne2sr/0/0/0.png")"
 
-# CORS is what actually breaks in production: a working origin that the browser
+# CORS is what actually breaks in production: a working origin the browser
 # refuses to read cross-origin looks identical to an outage from the app side.
-cors=$(curl -s -o /dev/null -D - \
-    -H "Origin: ${SITE_ORIGIN}" \
-    -H 'Range: bytes=0-100' \
-    "${TILES_ORIGIN}/${PMTILES_NAME}" | grep -ci 'access-control-allow-origin' || true)
-check "CORS header present for ${SITE_ORIGIN}" 1 "$cors"
+#
+# Every origin in the allowlist is checked, not just one. Checking a single
+# origin is what let the staging origin go missing in the move off Caddy — the
+# suite passed while snowdesk-staging.onrender.com was blocked, and it surfaced
+# in a browser instead.
+#
+# The list is read out of worker/wrangler.toml rather than restated here: it is
+# the only live copy, and a second one would drift the same way.
+allowed=$(sed -n 's/^ALLOWED_ORIGINS *= *"\(.*\)"/\1/p' worker/wrangler.toml)
+if [ -z "$allowed" ]; then
+    echo "  FAIL  could not read ALLOWED_ORIGINS from worker/wrangler.toml"
+    failures=$((failures + 1))
+fi
+
+for site in $allowed; do
+    acao=$(curl -sI -H "Origin: ${site}" "${TILES_ORIGIN}/tiles/0/0/0.mvt" \
+        | tr -d '\r' | grep -i '^access-control-allow-origin:' | cut -d' ' -f2-)
+    check "CORS allows ${site}" "$site" "${acao:-<none>}"
+done
 
 # Not a failure — the origin is correct either way — but DYNAMIC means the edge
 # is not caching, so every glyph and style read goes to R2. Cloudflare caches
