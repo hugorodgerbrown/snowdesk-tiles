@@ -187,6 +187,19 @@ the current archive and gets an hour.
 The style is uploaded **last**, so a client fetching the new style never sees it
 before the tiles it references exist.
 
+If the upload fails with a header error naming a checksum — `Header
+'x-amz-checksum-crc32' not implemented`, `CRC64NVME not implemented`, or an
+`XAmzContentChecksumMismatch` — that is the AWS CLI adding checksum headers R2
+has not always accepted, not a problem with the assets or credentials. Retry
+with checksums off:
+
+```bash
+AWS_REQUEST_CHECKSUM_CALCULATION=when_required \
+    op run --env-file=.env.1password -- ./scripts/upload.sh
+```
+
+`sync` skips what already transferred, so a retry resumes rather than restarts.
+
 ## Step 5 — Verify
 
 ```bash
