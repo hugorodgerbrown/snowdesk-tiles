@@ -31,12 +31,35 @@ export AWS_DEFAULT_REGION
 
 s3() { aws s3 "$@" --endpoint-url "$R2_ENDPOINT" --no-progress; }
 
-for required in "${DIST_DIR}/${PMTILES_NAME}" "${DIST_DIR}/styles/liberty"; do
-    if [ ! -f "$required" ]; then
-        echo "error: ${required} missing — run build-extract.sh and build.sh first" >&2
-        exit 1
-    fi
-done
+if [ ! -f "${DIST_DIR}/styles/liberty" ]; then
+    echo "error: ${DIST_DIR}/styles/liberty missing — run build.sh first" >&2
+    exit 1
+fi
+
+# The archive may legitimately not be here: vm-build.sh builds it on a rented
+# box and uploads it from there, so the local tree never holds it. Requiring it
+# would block the very workflow the runbook recommends. Only insist that it
+# exists *somewhere* — locally to upload, or already in the bucket.
+local_size=""
+if [ -f "${DIST_DIR}/${PMTILES_NAME}" ]; then
+    local_size=$(wc -c <"${DIST_DIR}/${PMTILES_NAME}" | tr -d ' ')
+fi
+
+remote_size=$(aws s3api head-object \
+    --endpoint-url "$R2_ENDPOINT" \
+    --bucket "$R2_BUCKET" \
+    --key "$PMTILES_NAME" \
+    --query ContentLength --output text 2>/dev/null || echo "")
+
+if [ -z "$local_size" ] && [ -z "$remote_size" ]; then
+    cat >&2 <<EOF
+error: ${PMTILES_NAME} is neither in ${DIST_DIR}/ nor in the bucket
+
+Build it first — ./scripts/build-extract.sh locally, or ./scripts/vm-build.sh
+on a VM with the disk for it.
+EOF
+    exit 1
+fi
 
 # Order matters. The style names the PMTiles archive, so everything it points
 # at must already be live before the style itself is published; otherwise a
@@ -69,20 +92,14 @@ else
 fi
 
 echo "==> vector tiles (${PMTILES_NAME}, multipart)"
-# `cp` always re-uploads, and the archive is 1.5 GB. It changes only when the
-# extract is rebuilt, whereas the style changes whenever the origin or tile path
-# moves — so a style-only publish would otherwise push the whole archive again
-# for nothing. Compare sizes and skip when they match; FORCE_ARCHIVE=1 overrides
-# (a rebuild that happens to land on the same byte count is possible, if
-# unlikely).
-local_size=$(wc -c <"${DIST_DIR}/${PMTILES_NAME}" | tr -d ' ')
-remote_size=$(aws s3api head-object \
-    --endpoint-url "$R2_ENDPOINT" \
-    --bucket "$R2_BUCKET" \
-    --key "$PMTILES_NAME" \
-    --query ContentLength --output text 2>/dev/null || echo "")
-
-if [ "${FORCE_ARCHIVE:-0}" != "1" ] && [ "$local_size" = "$remote_size" ]; then
+# `cp` always re-uploads, and the archive is several GB. It changes only when
+# the extract is rebuilt, whereas the style changes whenever the origin or tile
+# path moves — so a style-only publish would otherwise push the whole archive
+# again for nothing. Sizes were compared above; FORCE_ARCHIVE=1 overrides (a
+# rebuild landing on an identical byte count is possible, if unlikely).
+if [ -z "$local_size" ]; then
+    echo "    not built locally, already in the bucket (${remote_size} bytes) — skipping"
+elif [ "${FORCE_ARCHIVE:-0}" != "1" ] && [ "$local_size" = "$remote_size" ]; then
     echo "    unchanged (${local_size} bytes) — skipping; FORCE_ARCHIVE=1 to override"
 else
     s3 cp "${DIST_DIR}/${PMTILES_NAME}" "s3://${R2_BUCKET}/${PMTILES_NAME}" \
