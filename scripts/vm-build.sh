@@ -10,7 +10,7 @@
 # tile URL template, not the archive, and the Worker resolves the archive through
 # PMTILES_KEY. So this uploads one object and nothing else changes.
 #
-#     git clone -b BRANCH https://github.com/hugorodgerbrown/snowdesk-tiles.git
+#     git clone https://github.com/hugorodgerbrown/snowdesk-tiles.git
 #     ./snowdesk-tiles/scripts/vm-build.sh
 #
 # Not `curl ... | bash`: the prompts below read from stdin, which that form has
@@ -26,8 +26,7 @@
 
 set -euo pipefail
 
-# REPO_BRANCH matters until the branch is merged: main does not have this script
-# yet, so a default clone would fetch a tree without it.
+# Overridable so a VM can build from a branch when iterating on the pipeline.
 : "${REPO_URL:=https://github.com/hugorodgerbrown/snowdesk-tiles.git}"
 : "${REPO_BRANCH:=main}"
 

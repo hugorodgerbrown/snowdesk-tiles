@@ -145,13 +145,11 @@ finished sooner.
        | jq -r '.fields[] | select(.label|test("Account ID|S3 Access Key ID|S3 Secret Access Key")) | "\(.label): \(.value)"'
    ```
 
-3. **SSH in and run the build.** Replace the branch with `main` once this has
-   merged:
+3. **SSH in and run the build:**
 
    ```bash
    ssh root@<server-ip>
-   git clone -b claude/openfreemap-tiles-deploy-f1f389 \
-       https://github.com/hugorodgerbrown/snowdesk-tiles.git
+   git clone https://github.com/hugorodgerbrown/snowdesk-tiles.git
    ./snowdesk-tiles/scripts/vm-build.sh
    ```
 
