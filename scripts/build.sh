@@ -13,7 +13,22 @@ cd "$(dirname "$0")/.."
 # shellcheck source=scripts/config.sh
 source scripts/config.sh
 
+# PYTHON must be a path to an interpreter, not a command line — it is invoked
+# quoted, so "uv run python" would be looked up as a single executable name and
+# fail. Check it up front: the mirror is a ~1 GB download and failing 20 minutes
+# in over the interpreter is a poor use of anyone's afternoon.
 python=${PYTHON:-python3}
+
+if ! "$python" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 12) else 1)' 2>/dev/null; then
+    cat >&2 <<EOF
+error: ${python} is not a usable Python 3.12+ interpreter
+
+PYTHON must be a path to an interpreter, not a command line. With uv:
+
+    PYTHON=\$(uv python find 3.12) ./scripts/build.sh
+EOF
+    exit 1
+fi
 
 echo "==> mirroring sprites and glyphs from ${UPSTREAM_ORIGIN}"
 "$python" scripts/mirror_assets.py --dist "$DIST_DIR"
