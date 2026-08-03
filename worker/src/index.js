@@ -86,35 +86,39 @@ class R2Source {
   }
 }
 
-/** Echo the Origin only for allowed sites, mirroring the bucket's CORS policy. */
-function corsHeaders(request, allowedOrigins) {
-  const origin = request.headers.get("Origin");
-  if (!origin || !allowedOrigins.includes(origin)) return {};
+/**
+ * CORS headers. Wildcard, deliberately, and with no `Vary`.
+ *
+ * An earlier version echoed the request's Origin against an allowlist and sent
+ * `Vary: Origin`. That broke Snowdesk's offline basemap cache. The Cache API
+ * honours Vary on lookup, and the app matches cached tiles with a constructed
+ * Request (`caches.match(new Request(url))`, map.js) which carries no Origin
+ * header — so a response stored under `Vary: Origin` could never be matched
+ * again, and every cached tile became invisible. Downloads failed with no
+ * console error, because nothing threw: the lookup simply missed.
+ *
+ * The allowlist was not buying much. These are public map tiles on a domain
+ * chosen to be cookie-free, so there is no credentialed request to protect and
+ * no ambient authority to leak. OpenFreeMap serves `*` for the same reason, and
+ * matching it means the app's caching behaves as it did before self-hosting.
+ *
+ * The cost is that anyone may hotlink the tiles. R2 egress is free; the meter
+ * that moves is Workers requests. Watch that rather than guard the origin.
+ */
+function corsHeaders() {
   return {
-    "Access-Control-Allow-Origin": origin,
+    "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS",
     // Range and the 206 metadata: needed by anything reading the archive
-    // directly, and by SNOW-484's service worker to validate a cross-origin
-    // partial response.
+    // directly, and by SNOW-484's service worker to validate a partial response.
     "Access-Control-Allow-Headers": "Range",
     "Access-Control-Expose-Headers": "Content-Range, Accept-Ranges, Content-Length",
     "Access-Control-Max-Age": "86400",
-    Vary: "Origin",
   };
 }
 
-/**
- * Attach CORS headers to a response on its way out.
- *
- * Applied *after* the cache lookup, never before it. The Cache API keys on URL,
- * and a response stored from a request carrying no Origin has no
- * `Vary: Origin` to key on — so that entry would later be handed to a
- * cross-origin request with no Access-Control-Allow-Origin, and the browser
- * would block a resource the origin is entitled to. Storing responses clean and
- * deciding CORS per request keeps the cache entry origin-independent.
- */
+/** Attach CORS headers to a response on its way out. */
 function withCors(response, cors) {
-  if (!Object.keys(cors).length) return response;
   const headers = new Headers(response.headers);
   for (const [name, value] of Object.entries(cors)) headers.set(name, value);
   return new Response(response.body, {
@@ -122,13 +126,6 @@ function withCors(response, cors) {
     statusText: response.statusText,
     headers,
   });
-}
-
-function allowedOriginList(env) {
-  return (env.ALLOWED_ORIGINS ?? "")
-    .split(/[\s,]+/)
-    .map((value) => value.trim())
-    .filter(Boolean);
 }
 
 /**
@@ -222,7 +219,7 @@ async function serveObject(request, env) {
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
-    const cors = corsHeaders(request, allowedOriginList(env));
+    const cors = corsHeaders();
 
     if (request.method === "OPTIONS") {
       return new Response(null, { status: 204, headers: cors });
