@@ -33,6 +33,11 @@ const TILE_CACHE_CONTROL = "public, max-age=31536000, immutable";
 // TileJSON names the archive, so it is the mutable pointer — same reasoning as
 // the style document, same TTL.
 const TILEJSON_CACHE_CONTROL = "public, max-age=3600";
+// Never let a 404 be cached. One emitted before an archive or a route exists —
+// a probe during a deploy, say — otherwise outlives the thing that fixed it and
+// reads as a broken deploy. Cloudflare applies a short default TTL to responses
+// with no Cache-Control, which is enough to mislead.
+const ERROR_CACHE_CONTROL = "no-store";
 
 // /tiles/<version>/{z}/{x}/{y}.mvt — the version segment is captured and then
 // ignored. It exists to give a rebuilt archive fresh URLs: tiles are immutable
@@ -173,7 +178,12 @@ async function serveObject(request, env) {
   // Object keys are the decoded path: "fonts/Noto Sans Regular/0-255.pbf" is
   // requested as fonts/Noto%20Sans%20Regular/...
   const key = decodeURIComponent(url.pathname.slice(1));
-  if (!key) return new Response("not found", { status: 404 });
+  if (!key) {
+    return new Response("not found", {
+      status: 404,
+      headers: { "Cache-Control": ERROR_CACHE_CONTROL },
+    });
+  }
 
   const range = request.headers.get("Range");
   const match = range && /^bytes=(\d+)-(\d*)$/.exec(range);
@@ -186,7 +196,12 @@ async function serveObject(request, env) {
   }
 
   const object = await env.BUCKET.get(key, options);
-  if (!object) return new Response("not found", { status: 404 });
+  if (!object) {
+    return new Response("not found", {
+      status: 404,
+      headers: { "Cache-Control": ERROR_CACHE_CONTROL },
+    });
+  }
 
   const headers = {
     "Content-Type": object.httpMetadata?.contentType ?? "application/octet-stream",
@@ -245,7 +260,10 @@ export default {
       const match =
         TILE_PATH.exec(url.pathname) ?? LEGACY_TILE_PATH.exec(url.pathname);
       if (!match) {
-        return new Response("not found", { status: 404, headers: cors });
+        return new Response("not found", {
+          status: 404,
+          headers: { ...cors, "Cache-Control": ERROR_CACHE_CONTROL },
+        });
       }
 
       const [, z, x, y] = match;
