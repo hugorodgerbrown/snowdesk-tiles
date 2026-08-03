@@ -4,10 +4,10 @@ Self-hosted OpenFreeMap basemap for Snowdesk, served at
 `https://tiles.snowdesk-data.info/`. Removes the OpenFreeMap volunteer-tier
 dependency ([SNOW-485](https://linear.app/hugorodgerbrown/issue/SNOW-485)).
 
-There is no server. The basemap is a set of static objects in a Cloudflare R2
-bucket behind a custom domain; MapLibre reads the vector tiles directly out of
-the `.pmtiles` archive using HTTP Range requests. This repo is the build
-pipeline that produces those objects, the bucket's CORS policy, and the runbook.
+The basemap is a set of static objects in a Cloudflare R2 bucket, fronted by a
+small Worker that also serves vector tiles as XYZ out of the `.pmtiles` archive.
+This repo is the build pipeline that produces those objects, the Worker, and the
+runbook.
 
 The Django side (the `OPENFREEMAP_STYLE_URL` env var and the CSP `connect-src`
 entry) lives in `snowdesk-data-pipeline` under SNOW-242.
@@ -22,9 +22,9 @@ entry) lives in `snowdesk-data-pipeline` under SNOW-242.
 | `scripts/rewrite_style.py` | Repoints the Liberty style JSON at our origin and archive. |
 | `scripts/build.sh` | Runs the two above to assemble `dist/`. |
 | `scripts/upload.sh` | Publishes `dist/` to R2 with per-class Content-Type and Cache-Control. |
-| `scripts/setup-bucket.sh` | One-time bucket + CORS + custom domain provisioning. |
+| `scripts/setup-bucket.sh` | One-time bucket creation. |
 | `scripts/verify.sh` | Acceptance checks against the live origin. |
-| `r2-cors.json` | The bucket's CORS policy, under version control. |
+| `worker/` | Worker serving XYZ tiles, and the CORS allowlist (`ALLOWED_ORIGINS`). |
 
 ## Why R2 and not an origin server
 
@@ -63,13 +63,17 @@ supported for production traffic.
 
 ## Serving model
 
-Two halves on one hostname:
+The Worker (`worker/`) owns the hostname and answers everything:
 
-- **The bucket** serves the style, sprites, glyphs and the Natural Earth raster
-  straight from R2 over its custom domain.
-- **A Worker** (`worker/`) serves vector tiles at `/tiles/{z}/{x}/{y}.mvt`,
-  reading byte ranges out of the `.pmtiles` archive through an R2 binding. The
-  archive itself stays in the bucket and is never fetched whole.
+- `/tiles/{z}/{x}/{y}.mvt` — vector tiles, read as byte windows out of the
+  `.pmtiles` archive through an R2 binding. The archive is never fetched whole.
+- Everything else — style, sprites, glyphs, the Natural Earth raster — passed
+  through to the bucket, returning each object's stored `Content-Type` and
+  `Cache-Control` (the values `upload.sh` set; R2 infers neither).
+
+CORS is the Worker's too, from `ALLOWED_ORIGINS`. The bucket has no custom
+domain and is reached only through the binding, so its own CORS policy would
+never apply.
 
 The style therefore carries an ordinary XYZ `tiles` array, not a `pmtiles://`
 URL, and **the frontend needs no change** — `OPENFREEMAP_STYLE_URL` is the only
@@ -138,9 +142,9 @@ that the only thing the style rewrite has to change is the hostname:
   `python scripts/mirror_assets.py --skip-raster` while iterating, but ship it:
   without it the basemap 404s when zoomed out.
 - **The style itself**, rewritten by `rewrite_style.py` to point every sprite,
-  glyph, raster and vector URL at `TILES_ORIGIN`, with the vector source
-  swapped to `pmtiles://$TILES_ORIGIN/$PMTILES_NAME`. The script exits non-zero
-  if any upstream reference survives.
+  glyph, raster and vector URL at `TILES_ORIGIN`, with the vector source given
+  an XYZ `tiles` array pointing at `$TILES_ORIGIN/$TILE_PATH`. The script exits
+  non-zero if any upstream reference survives.
 
 Resulting tree, which is also the object layout of the bucket:
 
@@ -159,10 +163,15 @@ dist/
 op run --env-file=.env.1password -- ./scripts/setup-bucket.sh
 ```
 
-Creates the bucket, applies `r2-cors.json`, and attaches
-`tiles.snowdesk-data.info`. Rerun it after editing the CORS policy. It prints
-one remaining manual step — adding a Cache Rule — because Cloudflare does not
-cache JSON or unknown extensions by default.
+Creates the bucket and prints the one remaining manual step — adding a Cache
+Rule — because Cloudflare does not cache JSON or unknown extensions by default.
+
+It no longer sets a bucket CORS policy. A bucket CORS policy applies only to
+requests made directly to the bucket over HTTP, and nothing does that: the
+Worker owns the hostname and reads objects through its R2 binding. The allowlist
+lives in `ALLOWED_ORIGINS` in `worker/wrangler.toml`, and only there — the
+staging origin went missing because it was duplicated across two files and only
+one of them was live.
 
 Needs `CLOUDFLARE_API_TOKEN`, not `wrangler login`: wrangler's OAuth flow
 requires a TTY and refuses to run without one, so anything depending on it

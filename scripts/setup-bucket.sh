@@ -2,7 +2,8 @@
 # One-time R2 bucket provisioning (SNOW-485).
 #
 # Creates the bucket, applies the committed CORS policy, and attaches the custom
-# domain. Idempotent: rerun it after editing r2-cors.json to push the new policy.
+# domain. Idempotent. CORS is not set here — see the note by the bucket create
+# step; the allowlist lives in worker/wrangler.toml.
 #
 # Requires wrangler (npx wrangler) authenticated against the Cloudflare account,
 # and CLOUDFLARE_ZONE_ID for the snowdesk-data.info zone.
@@ -112,12 +113,12 @@ configuration. Creating a bucket, setting CORS and attaching a domain all need
 
 Two ways forward:
 
-  1. Do this one-time setup in the R2 dashboard. Create the bucket, paste
-     r2-cors.json into Settings > CORS Policy, and add the custom domain. Keeps
-     the token the pipeline uses every day unable to delete your buckets.
+  1. Do this one-time setup in the R2 dashboard: create the bucket there and
+     skip this script. Keeps the token the pipeline uses every day unable to
+     delete your buckets.
 
   2. Create a second, admin-scoped token for setup only, and keep the object
-     token for uploads. Worth it if you expect to re-apply CORS from the repo.
+     token for uploads.
 EOF
     fi
     exit 1
@@ -128,17 +129,19 @@ echo "==> creating bucket ${R2_BUCKET} (location hint ${R2_LOCATION_HINT})"
 run_idempotent "bucket create" "already exists" \
     $wrangler r2 bucket create "$R2_BUCKET" --location "$R2_LOCATION_HINT"
 
-echo "==> applying CORS policy from r2-cors.json"
-# If wrangler rejects the file, paste r2-cors.json into the dashboard editor
-# instead (R2 > bucket > Settings > CORS Policy); it takes the same shape.
-$wrangler r2 bucket cors set "$R2_BUCKET" --file r2-cors.json --force
+# No CORS step here on purpose. A bucket CORS policy only applies to requests
+# made directly to the bucket over HTTP, and nothing does that any more: the
+# Worker owns the hostname and reads objects through its R2 binding, which never
+# involves CORS. The allowlist lives in ALLOWED_ORIGINS in worker/wrangler.toml,
+# and only there — the staging origin went missing precisely because it was
+# duplicated across two files and only one of them was live.
 
 if [ -z "$CLOUDFLARE_ZONE_ID" ]; then
     cat >&2 <<EOF
 
 ==> skipping custom domain: CLOUDFLARE_ZONE_ID is not set
 
-The bucket and its CORS policy are in place, so you can build and upload now.
+The bucket exists, so you can build and upload now.
 Once ${domain#*.} is active on Cloudflare nameservers, rerun with the zone id
 from the zone's overview page to attach ${domain}:
 
