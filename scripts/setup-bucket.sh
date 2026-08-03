@@ -96,6 +96,30 @@ run_idempotent() {
     fi
     printf '%s\n' "$output" >&2
     echo "error: ${label} failed" >&2
+
+    # A 403/10000 here is a permissions problem, not a bad token: the same token
+    # authenticates fine for object operations. R2 tokens come in four levels and
+    # only "Admin Read & Write" can create buckets or edit bucket configuration.
+    if printf '%s' "$output" | grep -qi '10000\|403\|forbidden'; then
+        cat >&2 <<'EOF'
+
+This looks like a permissions problem rather than a bad token.
+
+R2 API tokens come in four levels. "Object Read & Write" — the right one for
+upload.sh — can read and write objects but cannot create buckets or edit bucket
+configuration. Creating a bucket, setting CORS and attaching a domain all need
+"Admin Read & Write".
+
+Two ways forward:
+
+  1. Do this one-time setup in the R2 dashboard. Create the bucket, paste
+     r2-cors.json into Settings > CORS Policy, and add the custom domain. Keeps
+     the token the pipeline uses every day unable to delete your buckets.
+
+  2. Create a second, admin-scoped token for setup only, and keep the object
+     token for uploads. Worth it if you expect to re-apply CORS from the repo.
+EOF
+    fi
     exit 1
 }
 
