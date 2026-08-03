@@ -146,7 +146,9 @@ cache JSON or unknown extensions by default.
 
 Needs `CLOUDFLARE_API_TOKEN`, not `wrangler login`: wrangler's OAuth flow
 requires a TTY and refuses to run without one, so anything depending on it
-breaks outside an interactive shell. `CLOUDFLARE_ZONE_ID` is optional — leave
+breaks outside an interactive shell. It also needs `CLOUDFLARE_ACCOUNT_ID` —
+without one wrangler resolves the account through `/memberships`, a
+user-scoped endpoint an account-scoped R2 token cannot read. `CLOUDFLARE_ZONE_ID` is optional — leave
 it unset while the nameserver transfer is pending and the script will create
 the bucket and CORS policy, then tell you how to attach the domain later.
 

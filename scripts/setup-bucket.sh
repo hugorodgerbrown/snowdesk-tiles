@@ -56,7 +56,28 @@ Then run through 1Password so the value never reaches your shell history:
 EOF
     exit 1
 fi
-export CLOUDFLARE_API_TOKEN
+
+# Without an account id wrangler works out which account the token belongs to by
+# calling /memberships — a *user*-scoped endpoint. An R2 API token is scoped to
+# one account and cannot read it, so that call fails with:
+#
+#     ✘ [ERROR] A request to the Cloudflare API (/memberships) failed.
+#
+# Naming the account skips the lookup entirely.
+if [ -z "${CLOUDFLARE_ACCOUNT_ID:-}" ]; then
+    cat >&2 <<'EOF'
+error: CLOUDFLARE_ACCOUNT_ID is not set
+
+Without it wrangler tries to resolve the account through /memberships, which an
+account-scoped R2 token has no permission to read. Find the id on the R2
+overview page in the Cloudflare dashboard.
+
+    op run --env-file=.env.1password -- ./scripts/setup-bucket.sh
+EOF
+    exit 1
+fi
+
+export CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID
 
 # Treat "already exists" as success and anything else as a real failure. A bare
 # `|| echo "already exists"` swallows auth errors, quota errors and typos alike,
