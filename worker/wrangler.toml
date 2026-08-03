@@ -1,0 +1,36 @@
+# Worker serving XYZ vector tiles out of the PMTiles archive (SNOW-485).
+#
+# Routed on a path under the same hostname the R2 custom domain serves, not on a
+# subdomain of its own. The Django CSP derives one connect-src origin from
+# OPENFREEMAP_STYLE_URL, so a second hostname would need a Django change and
+# reintroduce exactly the drift that derivation prevents.
+#
+# Cloudflare routes take precedence over a custom domain on the same hostname,
+# so /tiles/* reaches this Worker while every other path continues to be served
+# straight from the bucket. If that precedence does not hold in practice, widen
+# the route to tiles.snowdesk-data.info/* and add a passthrough to env.BUCKET
+# for non-tile paths.
+#
+#     cd worker && npm install && npx wrangler deploy
+
+name = "snowdesk-tiles"
+main = "src/index.js"
+compatibility_date = "2026-08-01"
+
+# Path-scoped so the bucket keeps serving style, sprites, glyphs and raster.
+[[routes]]
+pattern = "tiles.snowdesk-data.info/tiles/*"
+zone_name = "snowdesk-data.info"
+
+# Range reads into the archive go through the binding rather than back out over
+# HTTP: no egress, no public-URL round trip, and it works regardless of the
+# bucket's public access settings.
+[[r2_buckets]]
+binding = "BUCKET"
+bucket_name = "snowdesk-tiles"
+
+[vars]
+PMTILES_KEY = "alps.pmtiles"
+# Mirrors r2-cors.json. Kept as a var rather than hardcoded so the allowlist
+# moves with the deployment.
+ALLOWED_ORIGINS = "https://snowdesk.info https://www.snowdesk.info http://localhost:8000"

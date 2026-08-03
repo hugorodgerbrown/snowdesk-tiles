@@ -4,19 +4,18 @@
 SNOW-485. The public Liberty style at ``tiles.openfreemap.org`` references its
 own host in three places — the vector ``sources`` URL, the ``sprite`` base, and
 the ``glyphs`` template. Self-hosting means serving a copy of that style whose
-internal URLs point back at ``tiles.snowdesk-data.info`` instead, and whose vector
-source reads the local PMTiles archive via the client-side ``pmtiles://``
-protocol rather than the OpenFreeMap tile server.
+internal URLs point back at ``tiles.snowdesk-data.info`` instead, and whose
+vector source reads XYZ tiles from the Worker (see ``worker/``) rather than the
+OpenFreeMap tile server.
 
 Standalone operational tooling: stdlib only, no Django. Run it when building or
 refreshing the published assets; write the output to ``dist/styles/liberty``.
 
 Usage (ORIGIN = https://tiles.snowdesk-data.info):
-    python scripts/rewrite_style.py --origin ORIGIN --pmtiles alps.pmtiles \
-        > dist/styles/liberty
+    python scripts/rewrite_style.py --origin ORIGIN > dist/styles/liberty
 
     # Rewrite a local copy instead of fetching the upstream style:
-    python scripts/rewrite_style.py --source ./liberty.json --origin ORIGIN ...
+    python scripts/rewrite_style.py --source ./liberty.json --origin ORIGIN
 """
 
 from __future__ import annotations
@@ -49,14 +48,23 @@ def load_style(source: str) -> dict[str, Any]:
     return from_file
 
 
-def rewrite(style: dict[str, Any], origin: str, pmtiles: str) -> dict[str, Any]:
-    """Repoint every upstream URL at ``origin`` and read tiles from ``pmtiles``.
+def rewrite(style: dict[str, Any], origin: str, tile_path: str) -> dict[str, Any]:
+    """Repoint every upstream URL at ``origin`` and tiles at ``tile_path``.
 
     Every ``tiles.openfreemap.org`` occurrence (sprite, glyphs, and any stray
-    reference) is swapped for ``origin``; the first vector source is rewritten
-    to a ``pmtiles://`` URL so MapLibre reads the local archive directly via
-    range requests. Raises if no vector source is found — that would mean the
-    upstream style shape changed and the rewrite is no longer safe to trust.
+    reference) is swapped for ``origin``; each vector source is rewritten to an
+    XYZ ``tiles`` template served by the Worker.
+
+    An earlier revision emitted ``pmtiles://`` here so MapLibre could range-read
+    the archive directly. That needs the client to register the PMTiles protocol,
+    and it hands the frontend a source with no tile URLs — which the Snowdesk map
+    cannot work with: SNOW-521 resolves each basemap's vector-tile URL template
+    and SNOW-484's service worker pins basemap URLs for offline use, and neither
+    can express range reads into one 1.5 GB object. A plain ``tiles`` array keeps
+    this style shaped like every other basemap in the catalogue.
+
+    Raises if no vector source is found — that would mean the upstream style
+    shape changed and the rewrite is no longer safe to trust.
     """
     origin = origin.rstrip("/")
 
@@ -76,12 +84,13 @@ def rewrite(style: dict[str, Any], origin: str, pmtiles: str) -> dict[str, Any]:
             "review before trusting the rewrite"
         )
 
+    template = f"{origin}/{tile_path.lstrip('/')}"
     for name in vector_sources:
         spec = rewritten["sources"][name]
-        # Drop any server-generated tile endpoints; the client-side reader only
-        # needs the pmtiles:// url.
-        spec.pop("tiles", None)
-        spec["url"] = f"pmtiles://{origin}/{pmtiles}"
+        # Drop the upstream TileJSON pointer: `url` and `tiles` together is
+        # ambiguous, and MapLibre would fetch the former to discover the latter.
+        spec.pop("url", None)
+        spec["tiles"] = [template]
 
     return rewritten
 
@@ -100,14 +109,17 @@ def main(argv: list[str] | None = None) -> int:
         help="self-hosted origin, e.g. https://tiles.snowdesk-data.info",
     )
     parser.add_argument(
-        "--pmtiles",
-        required=True,
-        help="PMTiles filename on the origin, e.g. alps.pmtiles",
+        "--tile-path",
+        default="tiles/{z}/{x}/{y}.mvt",
+        help=(
+            "XYZ template the Worker serves, relative to the origin "
+            "(default: tiles/{z}/{x}/{y}.mvt)"
+        ),
     )
     args = parser.parse_args(argv)
 
     style = load_style(args.source)
-    rewritten = rewrite(style, args.origin, args.pmtiles)
+    rewritten = rewrite(style, args.origin, args.tile_path)
     json.dump(rewritten, sys.stdout, indent=2)
     sys.stdout.write("\n")
 

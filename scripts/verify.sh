@@ -58,6 +58,16 @@ check "glyphs respond" 200 \
 check "natural earth raster responds" 200 \
     "$(status "${TILES_ORIGIN}/natural_earth/ne2sr/0/0/0.png")"
 
+# Vector tiles come from the Worker, not the bucket. Until it is deployed the
+# style resolves and every other asset loads while the map renders empty, so
+# these are the checks that tell the two states apart.
+check "vector tile responds" 200 \
+    "$(status "${TILES_ORIGIN}/tiles/0/0/0.mvt")"
+check "vector tile is protobuf" "application/x-protobuf" \
+    "$(content_type "${TILES_ORIGIN}/tiles/0/0/0.mvt")"
+check "tilejson responds" 200 \
+    "$(status "${TILES_ORIGIN}/tiles/tiles.json")"
+
 # Content-Type is fixed at upload time and R2 does not infer it. A wrong one
 # fails inside MapLibre rather than at the HTTP layer, so every status check
 # above can pass while the map renders nothing.

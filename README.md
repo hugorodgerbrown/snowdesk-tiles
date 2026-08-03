@@ -63,14 +63,34 @@ supported for production traffic.
 
 ## Serving model
 
-Client-side PMTiles: the raw `.pmtiles` file is served as a single object and
-MapLibre reads it via Range requests (`pmtiles://` source in the style). Hence
-the `curl -r … .pmtiles → 206` check in `verify.sh`.
+Two halves on one hostname:
 
-> **Frontend dependency (in `snowdesk-data-pipeline`).** A `pmtiles://` source
-> requires `static/js/map.js` to register the PMTiles protocol (`pmtiles.js` →
-> `maplibregl.addProtocol`). That change belongs to SNOW-242's consumption of
-> this origin, and must be live before the cutover.
+- **The bucket** serves the style, sprites, glyphs and the Natural Earth raster
+  straight from R2 over its custom domain.
+- **A Worker** (`worker/`) serves vector tiles at `/tiles/{z}/{x}/{y}.mvt`,
+  reading byte ranges out of the `.pmtiles` archive through an R2 binding. The
+  archive itself stays in the bucket and is never fetched whole.
+
+The style therefore carries an ordinary XYZ `tiles` array, not a `pmtiles://`
+URL, and **the frontend needs no change** — `OPENFREEMAP_STYLE_URL` is the only
+thing that moves.
+
+That is the reason for the Worker. Client-side PMTiles was the original design,
+but it needs `maplibregl.addProtocol` *and* it hands the frontend a source with
+no tile URLs. Snowdesk's map cannot work with that: SNOW-521 resolves each
+basemap's vector-tile URL template and SNOW-484's service worker pins basemap
+URLs for offline use, and neither can express range reads into a single 1.5 GB
+object.
+
+It also fixes the caching problem. The archive is over Cloudflare's 512 MB
+per-file limit and so is never edge-cached — every range read reaches R2.
+Individual tiles are a few kB, cache normally, and are served from the edge on
+repeat reads.
+
+Both halves must sit on the same hostname. The Django CSP derives a single
+`connect-src` origin from `OPENFREEMAP_STYLE_URL`, so tiles served from a
+second hostname would need a Django change and reintroduce exactly the drift
+that derivation exists to prevent.
 
 ## Step 1 — Build the vector tile archive
 
@@ -155,6 +175,22 @@ the bucket and CORS policy, then tell you how to attach the domain later.
 Attaching the custom domain needs zone edit permission on the token. If yours
 is R2-only, the bucket and CORS steps still succeed and the domain can be
 attached from the R2 dashboard instead.
+
+## Step 3b — Deploy the tile Worker
+
+```bash
+cd worker && npm install && npx wrangler deploy
+```
+
+Needs a token with Workers edit permission — the R2 object token used for
+uploads is not enough. Route and bucket binding are in `worker/wrangler.toml`;
+`PMTILES_KEY` there must match `PMTILES_NAME` in `scripts/config.sh`, and the
+route path must match `TILE_PATH`.
+
+The route is scoped to `/tiles/*` so the bucket keeps serving everything else on
+the same hostname. Cloudflare routes take precedence over a custom domain on the
+same hostname; if that does not hold in practice, widen the route to `/*` and
+add a passthrough to `env.BUCKET` for non-tile paths.
 
 ## Step 4 — Publish
 

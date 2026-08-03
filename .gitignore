@@ -7,6 +7,10 @@
 planetiler.jar
 data/
 
+# Worker
+worker/node_modules/
+worker/.wrangler/
+
 # Python
 __pycache__/
 .pytest_cache/

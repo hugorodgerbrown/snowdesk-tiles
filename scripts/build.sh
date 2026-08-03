@@ -40,7 +40,7 @@ mkdir -p "${DIST_DIR}/styles"
 # truncated the real target by then.
 "$python" scripts/rewrite_style.py \
     --origin "$TILES_ORIGIN" \
-    --pmtiles "$PMTILES_NAME" \
+    --tile-path "$TILE_PATH" \
     >"${DIST_DIR}/styles/liberty.tmp"
 mv "${DIST_DIR}/styles/liberty.tmp" "${DIST_DIR}/styles/liberty"
 

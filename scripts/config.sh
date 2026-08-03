@@ -21,8 +21,14 @@
 : "${R2_BUCKET:=snowdesk-tiles}"
 
 # Filename of the vector-tile archive, on disk and as the R2 object key. The
-# style references this by name, so changing it means re-running the rewrite.
+# Worker reads it through its R2 binding — keep PMTILES_KEY in worker/wrangler.toml
+# in step with this.
 : "${PMTILES_NAME:=alps.pmtiles}"
+
+# XYZ template the Worker serves, relative to the origin. Written into the style
+# as the vector source's tiles array; must match the route in
+# worker/wrangler.toml.
+: "${TILE_PATH:=tiles/\{z\}/\{x\}/\{y\}.mvt}"
 
 # Geofabrik area planetiler builds. "alps" covers CH / AT / IT-South-Tyrol /
 # FR-Alps — every current avalanche region.
@@ -45,4 +51,4 @@
 
 export TILES_ORIGIN R2_BUCKET PMTILES_NAME PLANETILER_AREA PLANETILER_VERSION
 export PLANETILER_MEMORY UPSTREAM_ORIGIN UPSTREAM_STYLE_URL DIST_DIR
-export IMMUTABLE_CACHE STYLE_CACHE
+export IMMUTABLE_CACHE STYLE_CACHE TILE_PATH

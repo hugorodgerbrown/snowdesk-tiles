@@ -31,29 +31,41 @@ def style() -> dict[str, Any]:
     }
 
 
+TILE_PATH = "tiles/{z}/{x}/{y}.mvt"
+
+
 def test_sprite_and_glyphs_repointed_at_origin() -> None:
-    result = rewrite(style(), ORIGIN, "alps.pmtiles")
+    result = rewrite(style(), ORIGIN, TILE_PATH)
 
     assert result["sprite"] == f"{ORIGIN}/sprites/ofm_f384/ofm"
     assert result["glyphs"] == f"{ORIGIN}/fonts/{{fontstack}}/{{range}}.pbf"
 
 
-def test_vector_source_reads_local_pmtiles() -> None:
-    result = rewrite(style(), ORIGIN, "alps.pmtiles")
+def test_vector_source_uses_an_xyz_template() -> None:
+    result = rewrite(style(), ORIGIN, TILE_PATH)
     source = result["sources"]["openmaptiles"]
 
-    assert source["url"] == f"pmtiles://{ORIGIN}/alps.pmtiles"
-    # A leftover server-side tile endpoint would keep MapLibre talking to the
-    # old origin even though the pmtiles:// url is present.
-    assert "tiles" not in source
+    assert source["tiles"] == [f"{ORIGIN}/tiles/{{z}}/{{x}}/{{y}}.mvt"]
+    # `url` and `tiles` together is ambiguous: MapLibre would fetch the former
+    # as TileJSON to discover the latter, and the upstream one names the old
+    # origin.
+    assert "url" not in source
 
 
 def test_trailing_slash_on_origin_is_dropped() -> None:
-    result = rewrite(style(), f"{ORIGIN}/", "alps.pmtiles")
+    result = rewrite(style(), f"{ORIGIN}/", TILE_PATH)
 
-    assert result["sources"]["openmaptiles"]["url"] == (
-        f"pmtiles://{ORIGIN}/alps.pmtiles"
-    )
+    assert result["sources"]["openmaptiles"]["tiles"] == [
+        f"{ORIGIN}/tiles/{{z}}/{{x}}/{{y}}.mvt"
+    ]
+
+
+def test_leading_slash_on_tile_path_does_not_double_up() -> None:
+    result = rewrite(style(), ORIGIN, f"/{TILE_PATH}")
+
+    assert result["sources"]["openmaptiles"]["tiles"] == [
+        f"{ORIGIN}/tiles/{{z}}/{{x}}/{{y}}.mvt"
+    ]
 
 
 def test_missing_vector_source_is_an_error() -> None:
@@ -61,4 +73,4 @@ def test_missing_vector_source_is_an_error() -> None:
     without_vector["sources"]["openmaptiles"]["type"] = "raster"
 
     with pytest.raises(ValueError, match="no vector source"):
-        rewrite(without_vector, ORIGIN, "alps.pmtiles")
+        rewrite(without_vector, ORIGIN, TILE_PATH)
