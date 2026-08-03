@@ -19,10 +19,31 @@ source scripts/config.sh
 jar="planetiler.jar"
 jar_url="https://github.com/onthegomap/planetiler/releases/download/v${PLANETILER_VERSION}/planetiler.jar"
 
-if ! command -v java >/dev/null 2>&1; then
-    echo "error: java not found; planetiler needs Java 21+" >&2
+# Prefer $JAVA_HOME over whatever is on PATH. Homebrew's versioned JDKs are
+# keg-only — installed but not symlinked — so on macOS `java` is usually
+# Apple's stub, which reports "Unable to locate a Java Runtime" even when a
+# working JDK is in the cellar. JAVA_HOME is how you point at it without
+# putting a second Java on PATH for everything else.
+if [ -n "${JAVA_HOME:-}" ] && [ -x "${JAVA_HOME}/bin/java" ]; then
+    java="${JAVA_HOME}/bin/java"
+elif command -v java >/dev/null 2>&1 && java -version >/dev/null 2>&1; then
+    java="java"
+else
+    cat >&2 <<'EOF'
+error: no usable Java runtime; planetiler needs Java 21+
+
+macOS with Homebrew:
+    brew install openjdk@21
+    JAVA_HOME=$(brew --prefix openjdk@21) ./scripts/build-extract.sh
+
+`brew install` alone is not enough — openjdk@21 is keg-only, so nothing is
+added to PATH and /usr/bin/java stays Apple's stub.
+EOF
     exit 1
 fi
+
+version=$("$java" -version 2>&1 | head -1)
+echo "==> using ${java} (${version})"
 
 if [ ! -f "$jar" ]; then
     echo "==> downloading planetiler ${PLANETILER_VERSION}"
@@ -32,7 +53,7 @@ fi
 mkdir -p "$DIST_DIR"
 
 echo "==> building ${PLANETILER_AREA} -> ${DIST_DIR}/${PMTILES_NAME}"
-java "-Xmx${PLANETILER_MEMORY}" -jar "$jar" \
+"$java" "-Xmx${PLANETILER_MEMORY}" -jar "$jar" \
     --download \
     --area="$PLANETILER_AREA" \
     --output="${DIST_DIR}/${PMTILES_NAME}" \

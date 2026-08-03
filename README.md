@@ -78,9 +78,19 @@ the `curl -r … .pmtiles → 206` check in `verify.sh`.
 ./scripts/build-extract.sh
 ```
 
-Requires Java 21+. The Liberty style expects the **OpenMapTiles** schema, which
-planetiler emits; the ready-made extracts at `protomaps.com/extracts` are
-Protomaps-schema and will not render with Liberty.
+Requires Java 21+. On macOS, Homebrew's versioned JDKs are keg-only — installed
+but not symlinked onto `PATH` — and `/usr/bin/java` stays Apple's stub, which
+reports "Unable to locate a Java Runtime". Point `JAVA_HOME` at the cellar
+rather than putting a second Java on `PATH` for everything else:
+
+```bash
+brew install openjdk@21
+JAVA_HOME=$(brew --prefix openjdk@21) ./scripts/build-extract.sh
+```
+
+The Liberty style expects the **OpenMapTiles** schema, which planetiler emits;
+the ready-made extracts at `protomaps.com/extracts` are Protomaps-schema and
+will not render with Liberty.
 
 The default `alps` Geofabrik area covers CH / AT / IT-South-Tyrol / FR-Alps —
 every current avalanche region — and produces a 2–4 GB archive in ~20 minutes.
