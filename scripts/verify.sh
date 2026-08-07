@@ -100,6 +100,33 @@ read -r got_min got_max < <(curl -s "${TILES_ORIGIN}/styles/liberty" | zoom_rang
 check "style declares vector minzoom" "$want_min" "$got_min"
 check "style declares vector maxzoom" "$want_max" "$got_max"
 
+# The attribution goes the same way as the zoom range if it is not stated: it
+# lived in the TileJSON the rewrite drops, and the Snowdesk legend builds its
+# "Map data" section by reading `attribution` off each runtime source. With none
+# on any source the section renders as a bare heading and the OpenStreetMap and
+# OpenMapTiles credits we are obliged to show are simply absent (SNOW-640).
+# Nothing else here notices — every asset loads and the map renders correctly.
+#
+# Compared against the Worker's TileJSON for the same reason as the zoom range:
+# both surfaces publish this string, a client can reach either, and comparing
+# them to each other is the only way a copy that was not rebuilt shows up.
+#
+# Not folded into zoom_range: the value contains spaces, so `read -r a b` would
+# split it across fields.
+attribution() {
+    python3 -c '
+import json, sys
+doc = json.load(sys.stdin)
+source = doc.get("sources", {}).get(sys.argv[1], doc) if sys.argv[1] else doc
+print(source.get("attribution") or "<unset>")
+' "$1" 2>/dev/null || echo "<unreadable>"
+}
+
+want_attribution=$(curl -s "${TILES_ORIGIN}/tiles/${TILE_VERSION}/tiles.json" | attribution "")
+got_attribution=$(curl -s "${TILES_ORIGIN}/styles/liberty" | attribution openmaptiles)
+
+check "style declares vector attribution" "$want_attribution" "$got_attribution"
+
 # Coverage, at named places rather than in the abstract. A regional extract is
 # clipped to a polygon, not a bounding box, so tiles are served across the whole
 # bbox and are simply empty outside it — every status check passes while parts

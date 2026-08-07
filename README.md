@@ -255,6 +255,17 @@ that the only thing the style rewrite has to change is the hostname:
   Keep the two values in step with the archive; `verify.sh` checks the published
   style against the Worker's TileJSON, which reads the PMTiles header.
 
+  The **attribution** is stated for the same reason and was lost the same way:
+  it lived in that dropped TileJSON too. Snowdesk's map legend builds its "Map
+  data" section by reading `attribution` off each runtime source, so a style
+  carrying none on any source renders the section as a bare heading — with the
+  OpenStreetMap and OpenMapTiles credits we are obliged to show missing
+  entirely ([SNOW-640](https://linear.app/hugorodgerbrown/issue/SNOW-640)). The
+  rewrite writes the same string the Worker publishes in its TileJSON, and
+  `verify.sh` compares the two live so a style that was not rebuilt shows up.
+  The Natural Earth raster source gets its own credit. Upstream's OpenFreeMap
+  credit is deliberately dropped: they no longer serve any of this data.
+
 Resulting tree, which is also the object layout of the bucket:
 
 ```
@@ -469,5 +480,9 @@ operational tooling — no Django, no runtime dependencies.
 
 Server config and scripts in this repo: choose a licence for the repo. The
 served map assets (style, sprites, glyphs, tiles) are OpenFreeMap /
-OpenMapTiles / OpenStreetMap data under their own permissive licences —
-attribute accordingly in the map UI.
+OpenMapTiles / OpenStreetMap data under their own permissive licences.
+
+The credits the map UI has to show ride on the style's sources — see step 2.
+OpenStreetMap's ODbL and the OpenMapTiles terms both require attribution, and
+the client has nowhere else to read it from; the OpenFreeMap style, sprites and
+glyphs are BSD-licensed and need no UI credit.
