@@ -121,6 +121,32 @@ else
         --cache-control "$IMMUTABLE_CACHE"
 fi
 
+echo "==> terrain elevation tiles"
+# Tens of thousands of small objects rather than one large one, so `sync` is
+# doing real work here: a rerun after an interrupted upload transfers only what
+# is missing. Class A operations are billed per thousand writes, which at this
+# count is cents, and only on the first publish.
+if mirrored "$TERRAIN_DIR"; then
+    # grid.json is excluded and copied below. It is JSON, not an Int16 tile, and
+    # it is the pointer to everything else here — so it needs a different
+    # Content-Type, a short TTL, and to land last.
+    s3 sync "${DIST_DIR}/${TERRAIN_DIR}" "s3://${R2_BUCKET}/${TERRAIN_DIR}" \
+        --exclude 'grid.json' \
+        --content-type application/octet-stream \
+        --cache-control "$IMMUTABLE_CACHE"
+
+    if [ -f "${DIST_DIR}/${TERRAIN_DIR}/grid.json" ]; then
+        echo "    grid definition (published last, after its tiles)"
+        s3 cp "${DIST_DIR}/${TERRAIN_DIR}/grid.json" \
+            "s3://${R2_BUCKET}/${TERRAIN_DIR}/grid.json" \
+            --content-type application/json \
+            --cache-control "$STYLE_CACHE"
+    else
+        echo "    warning: no grid.json — SNOW-917 reads the grid definition" >&2
+        echo "             from it, so the tileset is unusable without one" >&2
+    fi
+fi
+
 echo "==> style (published last)"
 s3 cp "${DIST_DIR}/styles/liberty" "s3://${R2_BUCKET}/styles/liberty" \
     --content-type application/json \

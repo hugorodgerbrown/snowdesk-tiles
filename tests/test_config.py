@@ -56,3 +56,37 @@ def test_explicit_tile_path_still_wins() -> None:
     override = "custom/{z}/{x}/{y}.pbf"
 
     assert config_value("TILE_PATH", {"TILE_PATH": override}) == override
+
+
+def test_terrain_tile_path_has_no_stray_backslashes() -> None:
+    # Same brace hazard as TILE_PATH, same fix, and worth its own test because
+    # the value ends up published in grid.json as the URL template another
+    # repository resolves tiles with.
+    assert "\\" not in config_value("TERRAIN_TILE_PATH")
+
+
+def test_terrain_tile_path_carries_the_version() -> None:
+    assert config_value("TERRAIN_TILE_PATH") == "terrain/v1/{x}/{y}.s16"
+
+
+def test_terrain_version_flows_into_terrain_tile_path() -> None:
+    path = config_value("TERRAIN_TILE_PATH", {"TERRAIN_VERSION": "v4"})
+
+    assert path == "terrain/v4/{x}/{y}.s16"
+
+
+def test_explicit_terrain_tile_path_still_wins() -> None:
+    override = "terrain/custom/{x}/{y}.bin"
+
+    value = config_value("TERRAIN_TILE_PATH", {"TERRAIN_TILE_PATH": override})
+
+    assert value == override
+
+
+def test_terrain_bbox_is_four_numbers() -> None:
+    # Passed unquoted into fetch_swissalti3d.py --bbox, so it has to word-split
+    # into exactly four values or argparse rejects it a long way downstream.
+    parts = config_value("TERRAIN_BBOX").split()
+
+    assert len(parts) == 4
+    assert all(float(part) for part in parts)

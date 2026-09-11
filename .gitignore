@@ -7,6 +7,11 @@
 planetiler.jar
 data/
 
+# Terrain build intermediates — the downloaded swissALTI3D GeoTIFFs, the warped
+# raster and the flat grid. Tens of GB, and all of it reproducible from
+# build-terrain.sh.
+/work/
+
 # Worker
 worker/node_modules/
 worker/.wrangler/
