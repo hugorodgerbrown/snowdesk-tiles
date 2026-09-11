@@ -67,6 +67,27 @@ fi
 : "${TILE_MIN_ZOOM:=0}"
 : "${TILE_MAX_ZOOM:=14}"
 
+# Source extract planetiler downloads, and the bounding box it keeps.
+#
+# The box matches the live map's extent: roughly Paris to Zagreb, Luxembourg to
+# central Italy. It covers all of Switzerland and Austria, northern Italy, the
+# French Alps, southern Germany and Slovenia.
+#
+# PLANETILER_BOUNDS is the load-bearing part. A Geofabrik area is clipped to a
+# *polygon*, so tiles outside it are generated but empty — under "alps", Basel
+# returned a 0-byte tile and the Jura was effectively absent, while every HTTP
+# check still passed. A bounds rectangle has no such holes. "europe" is the
+# smallest Geofabrik source containing the box; only the box is processed.
+: "${PLANETILER_AREA:=europe}"
+: "${PLANETILER_BOUNDS:=1.0,42.0,18.0,50.5}"
+
+# Planetiler release to download, pinned so a rebuild is reproducible.
+: "${PLANETILER_VERSION:=0.8.3}"
+
+# Heap planetiler is given. Only used for a local run — vm-build.sh overrides it
+# with three quarters of the box's RAM.
+: "${PLANETILER_MEMORY:=8g}"
+
 # Upstream OpenFreeMap origin the assets are mirrored from.
 : "${UPSTREAM_ORIGIN:=https://tiles.openfreemap.org}"
 : "${UPSTREAM_STYLE_URL:=${UPSTREAM_ORIGIN}/styles/liberty}"
