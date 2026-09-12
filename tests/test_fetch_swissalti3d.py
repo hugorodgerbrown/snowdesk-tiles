@@ -78,18 +78,17 @@ def test_one_item_per_square() -> None:
 
 
 def test_a_resurveyed_square_keeps_the_newer_flight() -> None:
-    # swissALTI3D is re-flown on a six-year cycle. Every item published today is
-    # 2019, so this cannot be observed against the live API — and that is
-    # precisely why it is worth pinning: the first rebuild after a revision
-    # would otherwise blend two vintages along whatever line the re-survey
-    # happened to stop at.
+    # Live behaviour, not a hypothetical: the STAC API publishes every square
+    # around Zermatt twice, 2019 and 2024. Without this, gdalbuildvrt gets two
+    # overlapping rasters per square and the grid mixes vintages along whatever
+    # line the re-survey stopped at.
     chosen = fetch.select(
-        [item("2608-1094", year=2019), item("2608-1094", year=2025)], 2.0
+        [item("2620-1092", year=2019), item("2620-1092", year=2024)], 2.0
     )
 
     assert len(chosen) == 1
-    assert fetch.survey_year(chosen[0]) == 2025
-    assert "2025" in chosen[0]["_href"]
+    assert fetch.survey_year(chosen[0]) == 2024
+    assert "2024" in chosen[0]["_href"]
 
 
 def test_an_item_with_no_usable_asset_is_dropped_not_fatal() -> None:
