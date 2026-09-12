@@ -10,10 +10,19 @@ pinned down, so it is worth a test rather than a comment.
 
 from __future__ import annotations
 
+import re
 import subprocess
 from pathlib import Path
 
+import pytest
+
 CONFIG = Path(__file__).resolve().parents[1] / "scripts" / "config.sh"
+
+# Every name config.sh promises the other scripts, read off its own export
+# lines rather than listed here, so a name added to one and not the other is
+# still covered.
+EXPORTED = re.findall(r"^export (.+)$", CONFIG.read_text(), re.MULTILINE)
+EXPORTED = sorted({name for line in EXPORTED for name in line.split()})
 
 
 def config_value(name: str, env: dict[str, str] | None = None) -> str:
@@ -50,6 +59,16 @@ def test_tile_version_flows_into_tile_path() -> None:
     path = config_value("TILE_PATH", {"TILE_VERSION": "v9"})
 
     assert path == "tiles/v9/{z}/{x}/{y}.mvt"
+
+
+@pytest.mark.parametrize("name", EXPORTED)
+def test_exported_name_has_a_value(name: str) -> None:
+    # An exported-but-never-assigned name is invisible here and fatal there: the
+    # build scripts run under `set -u`, so the first one to dereference it dies
+    # with "unbound variable" — which nobody finds until the next rebuild. All
+    # four PLANETILER_* defaults were dropped this way, by a commit that only
+    # meant to rewrite the hunk above them.
+    assert config_value(name) != ""
 
 
 def test_explicit_tile_path_still_wins() -> None:
