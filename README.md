@@ -9,6 +9,11 @@ small Worker that also serves vector tiles as XYZ out of the `.pmtiles` archive.
 This repo is the build pipeline that produces those objects, the Worker, and the
 runbook.
 
+The same origin also serves a **terrain elevation grid** — Int16 heights on a
+5 m grid, sampled per point by Django rather than rendered by MapLibre
+([SNOW-908](https://linear.app/hugorodgerbrown/issue/SNOW-908)). It is a
+separate, one-off pipeline with its own section at the bottom.
+
 The Django side (the `OPENFREEMAP_STYLE_URL` env var and the CSP `connect-src`
 entry) lives in `snowdesk-data-pipeline` under SNOW-242.
 
@@ -24,6 +29,10 @@ entry) lives in `snowdesk-data-pipeline` under SNOW-242.
 | `scripts/upload.sh` | Publishes `dist/` to R2 with per-class Content-Type and Cache-Control. |
 | `scripts/setup-bucket.sh` | One-time bucket creation. |
 | `scripts/vm-build.sh` | Builds the archive on a throwaway VM and uploads it to R2. |
+| `scripts/terrain_grid.py` | The terrain grid's geometry and encoding. The contract with SNOW-917. |
+| `scripts/fetch_swissalti3d.py` | Lists the swissALTI3D squares over a box, from swisstopo's STAC API. |
+| `scripts/cut_terrain_tiles.py` | Cuts the warped raster into skirted Int16 tiles, and writes `grid.json`. |
+| `scripts/build-terrain.sh` | Runs the three above plus GDAL → `dist/terrain/`. One-off; needs ~100 GB. |
 | `scripts/verify.sh` | Acceptance checks against the live origin. |
 | `worker/` | Worker serving XYZ tiles, and the CORS allowlist (`ALLOWED_ORIGINS`). |
 
@@ -70,6 +79,11 @@ The Worker (`worker/`) owns the hostname and answers everything:
   the `.pmtiles` archive through an R2 binding. The archive is never fetched
   whole. The Worker ignores the version segment; it exists so a rebuilt archive
   gets fresh URLs (see below).
+- `/terrain/<version>/{x}/{y}.s16` — elevation tiles, read straight out of the
+  bucket with the version segment stripped. Absent tiles answer `204`, not
+  `404`: most of the Alps has no source yet, so "nothing covers this ground" is
+  an ordinary, cacheable answer rather than an error. `/terrain/<version>/grid.json`
+  is the grid definition.
 - Everything else — style, sprites, glyphs, the Natural Earth raster — passed
   through to the bucket, returning each object's stored `Content-Type` and
   `Cache-Control` (the values `upload.sh` set; R2 infers neither).
@@ -467,6 +481,209 @@ it. The archive is uncacheable at this size regardless, so excluding it costs
 nothing — R2 egress is free, and SNOW-484's service worker absorbs repeat reads
 on the client.
 
+## The terrain elevation grid
+
+A second tileset on the same origin, and a different kind of thing from the
+basemap: **nothing renders it**. Django fetches tiles and reads Int16 heights
+out of them to answer "what is the terrain height at this coordinate, and
+therefore what is the slope angle" ([SNOW-908]). That question is what
+[SNOW-910] (colouring a route line by the slope it crosses), [SNOW-911] (crux
+marking) and [SNOW-839] (scoring a route against the bulletin) all need, and it
+is what a pre-rendered slope overlay cannot answer — MapLibre paints those, but
+nothing can read a value back out.
+
+The Django half — the sampling API, the source registry and `TERRAIN_TILE_URL` —
+is [SNOW-917], in `snowdesk-data-pipeline`. What lives here is the build and the
+grid definition the two sides share.
+
+[SNOW-908]: https://linear.app/hugorodgerbrown/issue/SNOW-908
+[SNOW-910]: https://linear.app/hugorodgerbrown/issue/SNOW-910
+[SNOW-911]: https://linear.app/hugorodgerbrown/issue/SNOW-911
+[SNOW-839]: https://linear.app/hugorodgerbrown/issue/SNOW-839
+[SNOW-917]: https://linear.app/hugorodgerbrown/issue/SNOW-917
+[SNOW-693]: https://linear.app/hugorodgerbrown/issue/SNOW-693
+
+### The licence, confirmed before anything was downloaded
+
+SNOW-908 made this a stop condition, and it passes. swisstopo have published all
+federal geodata under their responsibility as **Open Government Data since 1
+March 2021**: the data "may be used, distributed and made accessible", "may be
+enriched and processed", and may be "used commercially". geocat's metadata
+record for swissALTI3D states the constraint as *"Opendata BY: Open use. Must
+provide the source."* No authorisation is needed. So redistributing a derived,
+resampled, requantised tileset is permitted.
+
+The one obligation is attribution. swisstopo accept `Source: Federal Office of
+Topography swisstopo` or `© swisstopo`; the short form is what
+`terrain_grid.py` publishes, on the source entry in `grid.json`, so it travels
+with the data rather than being remembered separately. Creative Commons
+licences are deliberately *not* used — swisstopo state they are incompatible
+with GeoIG/GeoIV — so this is not a CC-BY dataset even though the obligation
+looks like one.
+
+- [Terms of use for free geodata and geoservices (OGD)](https://www.swisstopo.admin.ch/en/terms-of-use-free-geodata-and-geoservices)
+- [swissALTI3D](https://www.swisstopo.admin.ch/en/height-model-swissalti3d)
+
+### What the grid is
+
+`scripts/terrain_grid.py` is the definition, and it is the only copy. Everything
+below is published in `grid.json` alongside the tiles.
+
+| | | Why |
+|---|---|---|
+| Projection | EPSG:3035 (ETRS89-LAEA) | Equal-area and metric across the whole Alps. One reprojection at build time now, against rebuilding the grid the first time a source outside Switzerland is added. |
+| Cell spacing | 5 m | Storage, not analysis — see below. |
+| Tile | 256 × 256 cells (1280 m) | Small enough that one point sample pulls 133 kB, not half a megabyte. |
+| Skirt | 1 cell on each side | So a sample in the outermost data cell can read its own neighbours. Stored size is 258 × 258. |
+| Stored value | little-endian Int16, `height_m / 0.25` | See below. |
+| Nodata | `-32768` | Distinct from every representable height, including 0 m. |
+| Row order | north to south, west to east | A plain north-up raster, as GDAL writes one. |
+| Boundary rule | half-open `[south, north)`, `[west, east)` | **Not GDAL's rule.** See below. |
+| Tile indexing | east and north from the CRS origin | Both positive everywhere in Europe, so the Worker's route matches `\d+` and rejects anything else. |
+
+Switzerland and Liechtenstein come to about 26,000 populated tiles and 3.4 GB.
+
+**The stored grid and the analysis window are different numbers.** Slope is a
+derivative over a neighbourhood, so it is the *window* — how far apart the two
+heights you difference are — that decides which terrain features survive. A 90 m
+window averages away the 40 m steep step that catches people; a 6 m window
+measures boulders. Because heights are stored rather than slope, the window is a
+read-time choice: a 3×3 neighbourhood here is a 15 m window, 5×5 is 25 m,
+box-filter to 10 m first and you have a 30 m window, all from the same bytes.
+Storing coarser would have foreclosed every window below the storage spacing
+permanently, to save disk we are not paying for. The default window is 10 m,
+because that is what swisstopo compute `ch.swisstopo.hangneigung-ueber_30` at and
+SNOW-910's route line has to agree with the raster underneath it.
+
+**Int16 at a 0.25 m scale, not Int16 metres.** Two bytes either way. Rounding to
+whole metres puts ±0.5 m of independent noise on each cell, which differenced
+across a 10 m window is ±1 m on the rise — at a true 35° that spans 31.0° to
+38.7°. The thresholds this data exists to resolve are 5° apart, so metre
+quantisation would be larger than the distinction being drawn. At 0.25 m the
+same worst case is ±1.0°, and the step sits below swissALTI3D's own vertical
+accuracy (0.3–0.5 m from LiDAR, 1–3 m from stereo correlation above 2000 m)
+rather than above it.
+
+**The boundary rule is not GDAL's, on purpose.** A coordinate landing exactly on
+a cell boundary belongs to the cell *north and east* of it. GDAL resolves a
+boundary northing downwards instead, but `tile_for` puts a coordinate on a
+tile's south edge inside that tile — so the southernmost row has to own its own
+south edge, or tiles and cells would disagree along every tile boundary in the
+grid. It only bites on exact multiples of 5 m, and it moves the answer by one
+cell.
+
+### The contract with SNOW-917
+
+The grid definition is the deliverable the Django side depends on, and the two
+live in different repositories. A grid rebuilt with different geometry and a
+sampler still applying the old numbers does not fail — it returns plausible,
+silently wrong heights. Three things keep that from happening:
+
+1. `grid.json` is published with the tiles and carries every number needed to
+   decode them. SNOW-917 reads it rather than hardcoding anything.
+2. `verify.sh` compares the published `grid.json` against
+   `python3 scripts/terrain_grid.py definition` on every run, so a rebuild whose
+   definition moved shows up as a failure rather than as odd slope angles.
+3. `TERRAIN_VERSION` is in the tile URL. Bump it for **any** change to the grid
+   definition, not just to the heights — tiles are cached immutable for a year
+   by URL, so a client holding tiles cut on one geometry and reading them under
+   another decodes nonsense. The Worker ignores the segment and always reads
+   `terrain/{x}/{y}.s16`, so a bump needs a rebuilt `grid.json` and no deploy.
+
+Outside coverage the Worker answers **204, never 404 and never a height**. That
+distinction is load-bearing: SNOW-839 and SNOW-910 both turn on an absent answer
+never rendering as gentle ground. The rule is stated in `grid.json` itself so it
+travels with the data.
+
+### Build it
+
+```bash
+./scripts/build-terrain.sh
+```
+
+One-off and slow. Terrain does not move on human timescales, so unlike the
+basemap there is no schedule and no refresh cadence — the only things that would
+ever trigger a re-run are swisstopo's six-yearly re-survey and a change to our
+own parameters, both years apart. That is exactly why it is a committed script
+rather than a sequence someone performed once: a re-run should be a diff, not an
+archaeology exercise.
+
+Needs GDAL (`apt install gdal-bin`, `brew install gdal`) and Python 3.12+. It
+does five things, each skipped if its output is already there, so an interrupted
+run resumes:
+
+1. List the swissALTI3D squares over `TERRAIN_BBOX` from swisstopo's STAC API,
+   taking the **2 m** GeoTIFF of the four assets on each item, one per square
+   kilometre, newest survey wins.
+2. Download them — about 41,000 files, ~42 GB, and the long pole by a distance.
+3. `gdalwarp` to EPSG:3035 at 5 m with `-r average`. Averaging is the whole
+   reason for taking the 2 m source rather than a coarser one.
+4. `gdal_translate` to a flat Int16 ENVI raster, quantised onto the stored scale
+   in one exact linear step. The `-scale` endpoints come from `terrain_grid.py`,
+   so the encoding cannot drift from the encoding SNOW-917 decodes with.
+5. Cut tiles. Because the raster arrives pre-quantised and tile-aligned, this is
+   pure byte slicing — no arithmetic per cell, which is what keeps numpy and
+   GDAL's Python bindings out of this repo entirely.
+
+Budget ~100 GB of disk and the best part of a day. Same advice as the basemap:
+rent a box rather than clearing that much space locally. It wants disk and
+cores, not planetiler's 16 GB of RAM.
+
+While iterating, build one region:
+
+```bash
+TERRAIN_BBOX="7.5 46.0 8.0 46.4" ./scripts/build-terrain.sh
+```
+
+`work/` holds the intermediates and is gitignored; delete it once the tiles are
+published.
+
+### Publish and verify
+
+```bash
+op run --env-file=.env.1password -- ./scripts/upload.sh
+./scripts/verify.sh
+```
+
+`upload.sh` syncs the tiles as `application/octet-stream`, immutable for a year,
+and copies `grid.json` last with a one-hour TTL — the same ordering rule as the
+style, for the same reason.
+
+`verify.sh` checks the definition against this repo's, reads heights at named
+places and asserts them against known ground (two lake surfaces, which are flat
+and known to the metre, then the range of the country from Basel to the
+Jungfraujoch), and confirms that a coordinate outside coverage answers 204 while
+a negative tile index answers 404. A grid that is offset, flipped north-south or
+built in the wrong projection still returns a plausible height for every
+coordinate; comparing against known ground is the only thing that catches it.
+
+`TERRAIN=0 ./scripts/verify.sh` skips the section. That is for shipping a
+basemap-only change before the terrain build has ever been run — not a way past
+a failure.
+
+### Coverage, and what is honestly missing
+
+The grid is Alps-wide from day one and only the Swiss part has data in it.
+Adding a source later ([SNOW-693], Copernicus GLO-30) is "resample a coarser
+source onto the existing grid"; the grid itself never moves. A source is a
+registry entry in `terrain_grid.py` — coverage, quality tier, native resolution,
+licence, attribution — and native resolution is recorded separately from cell
+spacing because they are not the same claim. A 30 m source on a 5 m grid is
+upsampling, which is honest only so long as nothing downstream reads 5 m cells
+as 5 m of information.
+
+The accepted limitation, stated plainly: **the display overlay covers more
+ground than the sampling grid**. In the Vanoise or the Écrins a user will see
+slope shading under an uncoloured route line. That is not a correctness bug
+while unknown never renders as gentle — and it is the strongest argument for
+GLO-30 as source number two.
+
+### Cost
+
+Storage is the only ongoing cost and it is the reason the grid can be this fine.
+~3.4 GB in R2 is about five cents a month, egress is free, and the writes are
+one-off. There is no dyno, no schedule and nothing to keep alive.
+
 ## Development
 
 ```bash
@@ -486,3 +703,10 @@ The credits the map UI has to show ride on the style's sources — see step 2.
 OpenStreetMap's ODbL and the OpenMapTiles terms both require attribution, and
 the client has nowhere else to read it from; the OpenFreeMap style, sprites and
 glyphs are BSD-licensed and need no UI credit.
+
+The terrain grid is derived from **swissALTI3D**, swisstopo free geodata (OGD).
+Redistributing a derived tileset is permitted; indicating the source is not
+optional. `© swisstopo` rides on the source entry in `grid.json`, so it travels
+with the data — anything surfacing a height or a slope derived from it has to
+show it. See the terrain section above for the wording swisstopo accept and why
+this is not a Creative Commons licence.

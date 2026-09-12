@@ -88,6 +88,68 @@ fi
 # with three quarters of the box's RAM.
 : "${PLANETILER_MEMORY:=8g}"
 
+# --- Terrain elevation grid (SNOW-908) --------------------------------------
+#
+# The terrain tileset is a second, independent set of objects on the same
+# origin: Int16 heights on a 5 m grid in EPSG:3035, sampled per point by Django
+# (SNOW-917) rather than rendered by MapLibre.
+#
+# Nothing about the grid's *geometry* is here on purpose. Cell size, tile size,
+# skirt width, projection and the height encoding live in
+# scripts/terrain_grid.py and are published in grid.json, because they are a
+# contract with another repository rather than a knob on this build. What is
+# settable here is which ground to cover and where to do the work.
+
+# Version segment in the terrain tile URLs. Same job as TILE_VERSION: tiles are
+# served immutable for a year and cached by URL, so a rebuilt grid under a fixed
+# path would be invisible to every client still holding the old one. The Worker
+# ignores the segment and always reads terrain/{x}/{y}.s16, so a bump needs no
+# Worker deploy — only a rebuilt grid.json naming the new prefix.
+#
+# Bump it for any change to the grid definition, not just to the heights: a
+# client caching tiles cut on one geometry and reading them under another
+# decodes silently wrong answers rather than failing.
+: "${TERRAIN_VERSION:=v1}"
+
+# XYZ-style template the Worker serves, relative to the origin. Written into
+# grid.json as tile_url_template.
+#
+# Assigned rather than defaulted with `${VAR:=default}` for the same reason as
+# TILE_PATH: the value contains braces, and inside a parameter expansion the
+# first unescaped `}` ends the expansion.
+if [ -z "${TERRAIN_TILE_PATH:-}" ]; then
+    TERRAIN_TILE_PATH="terrain/${TERRAIN_VERSION}/{x}/{y}.s16"
+fi
+
+# Subdirectory of DIST_DIR, and the bucket prefix. The Worker maps
+# /terrain/<version>/{x}/{y}.s16 onto terrain/{x}/{y}.s16 in the bucket.
+: "${TERRAIN_DIR:=terrain}"
+
+# Ground to cover, as a WGS84 bounding box: west south east north, space
+# separated. The default is swissALTI3D's own published extent — Switzerland
+# and Liechtenstein — so the fetch asks for everything the source has.
+#
+# The *grid* is Alps-wide regardless; this is only which part of it gets data.
+# Narrow it to build one region while iterating:
+#
+#     TERRAIN_BBOX="7.5 46.0 8.0 46.4" ./scripts/build-terrain.sh
+: "${TERRAIN_BBOX:=5.95 45.72 10.50 47.83}"
+
+# Source resolution to download, in metres. swissALTI3D publishes 0.5 m and 2 m;
+# 2 m still oversamples the 5 m grid enough for the box filter to have something
+# to average, at a sixteenth of the download.
+: "${TERRAIN_GSD:=2}"
+
+# Where the build's intermediates live: the downloaded GeoTIFFs, the warped
+# raster and the flat grid. Tens of GB, all of it disposable once the tiles are
+# published. Gitignored.
+: "${TERRAIN_WORK_DIR:=work/terrain}"
+
+# Parallel downloads. The source is tens of thousands of small files, so this is
+# latency-bound rather than bandwidth-bound; 8 is polite to data.geo.admin.ch
+# and still saturates a normal link.
+: "${TERRAIN_JOBS:=8}"
+
 # Upstream OpenFreeMap origin the assets are mirrored from.
 : "${UPSTREAM_ORIGIN:=https://tiles.openfreemap.org}"
 : "${UPSTREAM_STYLE_URL:=${UPSTREAM_ORIGIN}/styles/liberty}"
@@ -105,3 +167,5 @@ export TILES_ORIGIN R2_BUCKET PMTILES_NAME PLANETILER_AREA PLANETILER_VERSION
 export PLANETILER_MEMORY UPSTREAM_ORIGIN UPSTREAM_STYLE_URL DIST_DIR
 export IMMUTABLE_CACHE STYLE_CACHE TILE_PATH TILE_VERSION PLANETILER_BOUNDS
 export TILE_MIN_ZOOM TILE_MAX_ZOOM
+export TERRAIN_VERSION TERRAIN_TILE_PATH TERRAIN_DIR TERRAIN_BBOX TERRAIN_GSD
+export TERRAIN_WORK_DIR TERRAIN_JOBS

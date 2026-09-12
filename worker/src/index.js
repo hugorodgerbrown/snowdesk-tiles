@@ -14,6 +14,12 @@
 // R2. Individual tiles are a few kB, cache normally, and are served from the
 // edge on repeat reads.
 //
+// It also serves the terrain elevation grid under /terrain/ (SNOW-908). Those
+// are not map tiles — nothing renders them; Django reads Int16 heights out of
+// them per point to get a slope angle. They live here because they are the same
+// kind of object, on the same bucket, behind the same caching, and because a
+// second origin is the one thing the CSP cannot express (see below).
+//
 // This Worker owns the whole hostname and serves bucket objects itself for every
 // non-tile path. That is not the original design: the first attempt kept the R2
 // custom domain and routed only /tiles/* here, on the strength of Cloudflare's
@@ -57,6 +63,20 @@ const TILEJSON_PATH = /^\/tiles\/[^/]+\/tiles\.json$/;
 // Safe to delete once no request has arrived for them in a day or so.
 const LEGACY_TILE_PATH = /^\/tiles\/(\d+)\/(\d+)\/(\d+)\.(mvt|pbf)$/;
 const LEGACY_TILEJSON_PATH = /^\/tiles\/tiles\.json$/;
+
+// /terrain/<version>/{x}/{y}.s16 — Int16 elevation tiles on the 5 m EPSG:3035
+// grid, sampled per point by Django rather than rendered (SNOW-908). The
+// version segment is captured and ignored for the same reason as the vector
+// tiles', and bucket keys carry no version, so a rebuild replaces objects in
+// place while new URLs bypass a year of immutable caching.
+//
+// \d+ and not -?\d+ deliberately. Tile indices count east and north from the
+// EPSG:3035 origin, and both are positive everywhere in Europe — so a negative
+// index is a caller's arithmetic bug, and 404 says so where 204 would look like
+// ordinary missing coverage.
+const TERRAIN_TILE_PATH = /^\/terrain\/[^/]+\/(\d+)\/(\d+)\.s16$/;
+const TERRAIN_GRID_PATH = /^\/terrain\/[^/]+\/grid\.json$/;
+const TERRAIN_GRID_KEY = "terrain/grid.json";
 
 /**
  * Reads byte ranges out of the archive through the R2 binding.
@@ -166,6 +186,68 @@ async function tileJson(archive, request, env) {
 }
 
 /**
+ * Serve the terrain elevation grid: one Int16 tile, or its definition.
+ *
+ * Not left to serveObject's pass-through, for two reasons. The version segment
+ * has to be stripped — the objects are stored unversioned so a rebuild replaces
+ * them in place — and, more importantly, an absent tile has to be a 204 rather
+ * than a 404.
+ *
+ * That distinction is the point of the route. Switzerland is a diagonal country
+ * in a rectangular grid and most of the Alps has no source yet, so roughly half
+ * of all tile requests are legitimately for ground nothing covers. 204 says
+ * "no source here" and is cached like any other tile; the pass-through's 404 is
+ * marked no-store, so every sample outside coverage would reach R2 for ever.
+ * The caller must be able to tell that apart from a height — absent terrain can
+ * never be allowed to read as flat ground.
+ *
+ * grid.json is the exception: it is the contract, so its absence is a broken
+ * publish and gets a 404 rather than being quietly treated as empty.
+ */
+async function serveTerrain(request, env, url) {
+  if (TERRAIN_GRID_PATH.test(url.pathname)) {
+    const object = await env.BUCKET.get(TERRAIN_GRID_KEY);
+    if (!object) {
+      return new Response("terrain grid not published", {
+        status: 404,
+        headers: { "Cache-Control": ERROR_CACHE_CONTROL },
+      });
+    }
+    // The mutable pointer naming the current build, same as the style and the
+    // TileJSON, so the same short TTL.
+    return new Response(object.body, {
+      headers: {
+        "Content-Type": "application/json",
+        "Cache-Control": TILEJSON_CACHE_CONTROL,
+      },
+    });
+  }
+
+  const match = TERRAIN_TILE_PATH.exec(url.pathname);
+  if (!match) {
+    return new Response("not found", {
+      status: 404,
+      headers: { "Cache-Control": ERROR_CACHE_CONTROL },
+    });
+  }
+
+  const [, x, y] = match;
+  const object = await env.BUCKET.get(`terrain/${x}/${y}.s16`);
+  if (!object) {
+    return new Response(null, {
+      status: 204,
+      headers: { "Cache-Control": TILE_CACHE_CONTROL },
+    });
+  }
+  return new Response(object.body, {
+    headers: {
+      "Content-Type": "application/octet-stream",
+      "Cache-Control": TILE_CACHE_CONTROL,
+    },
+  });
+}
+
+/**
  * Serve a bucket object for any path that is not a tile.
  *
  * Content-Type and Cache-Control come from the object's stored metadata, which
@@ -243,47 +325,56 @@ export default {
       if (cached) return withCors(cached, cors);
     }
 
-    // Everything outside /tiles/ is a bucket object. This Worker owns the whole
-    // hostname, so it has to serve them; see the header comment for why.
-    if (!url.pathname.startsWith("/tiles/")) {
-      return withCors(await serveObject(request, env), cors);
-    }
-
-    const archive = new PMTiles(new R2Source(env.BUCKET, env.PMTILES_KEY));
-
     let response;
-    if (TILEJSON_PATH.test(url.pathname) || LEGACY_TILEJSON_PATH.test(url.pathname)) {
-      response = Response.json(await tileJson(archive, request, env), {
-        headers: { "Cache-Control": TILEJSON_CACHE_CONTROL },
-      });
+    if (url.pathname.startsWith("/terrain/")) {
+      // Elevation tiles, cached through the same path as vector tiles: they are
+      // immutable within a version, and ingest-time sampling reads the same
+      // handful of tiles for every route in a region.
+      response = await serveTerrain(request, env, url);
+    } else if (!url.pathname.startsWith("/tiles/")) {
+      // Everything outside /tiles/ and /terrain/ is a bucket object. This
+      // Worker owns the whole hostname, so it has to serve them; see the header
+      // comment for why.
+      return withCors(await serveObject(request, env), cors);
     } else {
-      const match =
-        TILE_PATH.exec(url.pathname) ?? LEGACY_TILE_PATH.exec(url.pathname);
-      if (!match) {
-        return new Response("not found", {
-          status: 404,
-          headers: { ...cors, "Cache-Control": ERROR_CACHE_CONTROL },
-        });
-      }
+      const archive = new PMTiles(new R2Source(env.BUCKET, env.PMTILES_KEY));
 
-      const [, z, x, y] = match;
-      const tile = await archive.getZxy(Number(z), Number(x), Number(y));
-
-      // A missing tile is normal — the extract is regional, and MapLibre treats
-      // 204 as "nothing here" rather than an error, which 404 would surface in
-      // the console on every pan outside the Alps.
-      if (!tile || !tile.data) {
-        response = new Response(null, {
-          status: 204,
-          headers: { "Cache-Control": TILE_CACHE_CONTROL },
+      if (
+        TILEJSON_PATH.test(url.pathname) ||
+        LEGACY_TILEJSON_PATH.test(url.pathname)
+      ) {
+        response = Response.json(await tileJson(archive, request, env), {
+          headers: { "Cache-Control": TILEJSON_CACHE_CONTROL },
         });
       } else {
-        response = new Response(tile.data, {
-          headers: {
-            "Content-Type": "application/x-protobuf",
-            "Cache-Control": TILE_CACHE_CONTROL,
-          },
-        });
+        const match =
+          TILE_PATH.exec(url.pathname) ?? LEGACY_TILE_PATH.exec(url.pathname);
+        if (!match) {
+          return new Response("not found", {
+            status: 404,
+            headers: { ...cors, "Cache-Control": ERROR_CACHE_CONTROL },
+          });
+        }
+
+        const [, z, x, y] = match;
+        const tile = await archive.getZxy(Number(z), Number(x), Number(y));
+
+        // A missing tile is normal — the extract is regional, and MapLibre
+        // treats 204 as "nothing here" rather than an error, which 404 would
+        // surface in the console on every pan outside the Alps.
+        if (!tile || !tile.data) {
+          response = new Response(null, {
+            status: 204,
+            headers: { "Cache-Control": TILE_CACHE_CONTROL },
+          });
+        } else {
+          response = new Response(tile.data, {
+            headers: {
+              "Content-Type": "application/x-protobuf",
+              "Cache-Control": TILE_CACHE_CONTROL,
+            },
+          });
+        }
       }
     }
 
