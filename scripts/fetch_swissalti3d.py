@@ -21,9 +21,12 @@ Two decisions, neither obvious from the API:
   something to average.
 * **One item per square kilometre, newest wins.** swissALTI3D is re-surveyed on
   a six-year cycle and the item id carries the survey year, so a re-flown square
-  can appear more than once. Every item found today is 2019, but a build run
-  after the next revision would silently mix two vintages at a seam, which is
-  exactly the kind of thing nobody would think to look for.
+  appears more than once. This is not hypothetical: every square around Zermatt
+  is published twice, 2019 and 2024. Without the dedupe ``gdalbuildvrt`` is
+  handed two overlapping rasters per square and resolves the overlap by source
+  order, so the grid would mix two vintages along whatever line the re-survey
+  happened to stop at — a seam nobody would think to look for, in data that
+  looks entirely reasonable either side of it.
 
 Standalone operational tooling: stdlib only, no Django.
 
@@ -200,6 +203,13 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: no {args.gsd} m assets on {len(found)} items", file=sys.stderr)
         return 1
 
+    # Reported separately because they mean different things. Superseded items
+    # are routine — a re-flown square is published alongside its predecessor.
+    # Unusable ones are a gap in the source at that resolution, and worth a look.
+    squares = {square_of(item) for item in found}
+    superseded = len(found) - len(squares)
+    unusable = len(squares) - len(chosen)
+
     Path(args.urls).write_text(
         "".join(f"{item['_href']}\n" for item in chosen), encoding="utf-8"
     )
@@ -208,10 +218,14 @@ def main(argv: list[str] | None = None) -> int:
         json.dumps(summary, indent=2) + "\n", encoding="utf-8"
     )
 
-    dropped = len(found) - len(chosen)
+    notes = []
+    if superseded:
+        notes.append(f"{superseded} superseded by a later survey")
+    if unusable:
+        notes.append(f"{unusable} with no {args.gsd} m asset")
     print(
         f"==> {summary['count']} squares, survey years {summary['survey_years']}"
-        + (f" ({dropped} superseded or unusable)" if dropped else ""),
+        + (f" ({', '.join(notes)})" if notes else ""),
         file=sys.stderr,
     )
     return 0

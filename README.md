@@ -625,15 +625,25 @@ run resumes:
    pure byte slicing — no arithmetic per cell, which is what keeps numpy and
    GDAL's Python bindings out of this repo entirely.
 
-Budget ~100 GB of disk and the best part of a day. Same advice as the basemap:
-rent a box rather than clearing that much space locally. It wants disk and
-cores, not planetiler's 16 GB of RAM.
+Budget ~100 GB of disk and a few hours, most of it the download. Same advice as
+the basemap: rent a box rather than clearing that much space locally. It wants
+disk and cores, not planetiler's 16 GB of RAM.
 
-While iterating, build one region:
+While iterating, build one region — a 66 km² box around Zermatt runs end to end
+in 22 seconds, which makes it a cheap way to prove the whole pipeline before
+committing to the full download:
 
 ```bash
-TERRAIN_BBOX="7.5 46.0 8.0 46.4" ./scripts/build-terrain.sh
+TERRAIN_BBOX="7.70 45.98 7.80 46.05" ./scripts/build-terrain.sh
 ```
+
+That box is a useful smoke test because the answers are checkable: Zermatt
+village reads 1608.5 m against a published 1,608 m, the Gornergrat ridge 3124 m,
+and the whole grid spans 1459.5–3391.5 m — which is the right range for that
+valley. One number landing on the village pins the projection, the tile and cell
+addressing, the row order and the height scale all at once; each of those is
+individually capable of returning a plausible height for every coordinate while
+being wrong.
 
 `work/` holds the intermediates and is gitignored; delete it once the tiles are
 published.
