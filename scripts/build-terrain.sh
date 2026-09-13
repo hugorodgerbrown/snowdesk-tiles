@@ -5,7 +5,7 @@
 # Int16 -> cut skirted tiles into dist/terrain/. Then ./scripts/upload.sh.
 #
 #     ./scripts/build-terrain.sh
-#     TERRAIN_BBOX="7.5 46.0 8.0 46.4" ./scripts/build-terrain.sh   # one region
+#     TERRAIN_BBOX="7.70 45.98 7.80 46.05" ./scripts/build-terrain.sh   # smoke test
 #
 # This is offline, one-off and slow. Terrain does not move on human timescales,
 # so unlike the basemap in this repo there is no schedule and no refresh
@@ -27,7 +27,9 @@
 #
 # Sizing, for all of Switzerland: ~41,000 source GeoTIFFs at about 1 MB each
 # (~42 GB), a ~7 GB warped intermediate, a 7.1 GB flat grid and ~3.4 GB of
-# tiles. Budget 100 GB free and the best part of a day, most of it download.
+# tiles. Budget 100 GB free and a few hours, most of it the download — a 66 km2
+# box around Zermatt ran end to end in 22 seconds, and the download is the only
+# stage that scales with the number of source squares rather than with area.
 # Every stage is skipped if its output is already there, so an interrupted run
 # resumes; FORCE_TERRAIN=1 redoes the GDAL stages.
 #
