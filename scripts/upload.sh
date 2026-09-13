@@ -31,11 +31,6 @@ export AWS_DEFAULT_REGION
 
 s3() { aws s3 "$@" --endpoint-url "$R2_ENDPOINT" --no-progress; }
 
-if [ ! -f "${DIST_DIR}/styles/liberty" ]; then
-    echo "error: ${DIST_DIR}/styles/liberty missing — run build.sh first" >&2
-    exit 1
-fi
-
 # The archive may legitimately not be here: vm-build.sh builds it on a rented
 # box and uploads it from there, so the local tree never holds it. Requiring it
 # would block the very workflow the runbook recommends. Only insist that it
@@ -73,11 +68,19 @@ fi
 # never "delete it" — nothing here syncs with `--delete`.
 mirrored() {
     if [ -d "${DIST_DIR}/$1" ]; then
+        published=$((published + 1))
         return 0
     fi
     echo "    none staged — leaving the published ${1} as they are"
     return 1
 }
+
+# Nothing staged at all is a mistake — a clone with no build run, or DIST_DIR
+# pointing at the wrong tree — and it would otherwise exit 0 having published
+# nothing. Counted rather than checked up front because which artefacts are
+# staged is exactly what varies between a style-only publish, a terrain publish
+# from the build box, and a full one.
+published=0
 
 echo "==> glyphs"
 if mirrored fonts; then
@@ -116,6 +119,7 @@ if [ -z "$local_size" ]; then
 elif [ "${FORCE_ARCHIVE:-0}" != "1" ] && [ "$local_size" = "$remote_size" ]; then
     echo "    unchanged (${local_size} bytes) — skipping; FORCE_ARCHIVE=1 to override"
 else
+    published=$((published + 1))
     s3 cp "${DIST_DIR}/${PMTILES_NAME}" "s3://${R2_BUCKET}/${PMTILES_NAME}" \
         --content-type application/octet-stream \
         --cache-control "$IMMUTABLE_CACHE"
@@ -148,9 +152,28 @@ if mirrored "$TERRAIN_DIR"; then
 fi
 
 echo "==> style (published last)"
-s3 cp "${DIST_DIR}/styles/liberty" "s3://${R2_BUCKET}/styles/liberty" \
-    --content-type application/json \
-    --cache-control "$STYLE_CACHE"
+# Same rule as the mirror directories, for the same reason: absent means "not
+# rebuilt", never "delete it". build-terrain.sh stages only dist/terrain/, so a
+# box that built the tileset has no style to publish, and requiring one would
+# mean mirroring ~1 GB of unchanged assets to get it.
+if [ -f "${DIST_DIR}/styles/liberty" ]; then
+    published=$((published + 1))
+    s3 cp "${DIST_DIR}/styles/liberty" "s3://${R2_BUCKET}/styles/liberty" \
+        --content-type application/json \
+        --cache-control "$STYLE_CACHE"
+else
+    echo "    none staged — leaving the published style as it is"
+fi
+
+if [ "$published" -eq 0 ]; then
+    cat >&2 <<EOF
+error: nothing staged in ${DIST_DIR}/ — published nothing
+
+Run ./scripts/build.sh for the style and the mirrored assets, or
+./scripts/build-terrain.sh for the elevation tileset, then rerun this.
+EOF
+    exit 1
+fi
 
 echo "==> published to ${TILES_ORIGIN}"
 echo "    verify with: ./scripts/verify.sh"

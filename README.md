@@ -659,6 +659,13 @@ op run --env-file=.env.1password -- ./scripts/upload.sh
 and copies `grid.json` last with a one-hour TTL — the same ordering rule as the
 style, for the same reason.
 
+It publishes whatever is staged in `dist/` and leaves the rest alone, so the box
+that ran the build can publish the tileset itself with the R2 credentials in its
+environment — `build-terrain.sh` stages `dist/terrain/` and nothing else, and an
+absent style or mirror means "not rebuilt", never "delete it". That matters
+because the full build wants a rented machine, and the alternative is mirroring
+~1 GB of unchanged assets on it purely to satisfy a precondition.
+
 `verify.sh` checks the definition against this repo's, reads heights at named
 places and asserts them against known ground (two lake surfaces, which are flat
 and known to the metre, then the range of the country from Basel to the
