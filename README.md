@@ -160,7 +160,7 @@ with 160 GB and 16 GB RAM will do.
 #### From scratch
 
 1. **Create the server.** console.hetzner.cloud → New Project → Add Server.
-   Location Falkenstein or Nuremberg, image **Ubuntu 24.04**, type **CPX41**,
+   Location Falkenstein or Nuremberg, image **Ubuntu 24.04**, type **CX42**,
    and add your SSH key. Everything else default. It boots in under a minute.
 
 2. **Get the R2 credentials to hand.** You need three values, all already in
@@ -183,6 +183,13 @@ with 160 GB and 16 GB RAM will do.
    not reach shell history. Then it installs Java and the AWS CLI, checks disk,
    sizes planetiler's heap to the box, builds, and uploads to R2. Expect one to
    two hours; run it under `tmux` if your connection is unreliable.
+
+   The AWS CLI comes from AWS's own installer rather than `apt`: Ubuntu 24.04
+   has no `awscli` package at all, so the apt line this script used to carry
+   failed on the image recommended right above.
+
+   `./scripts/vm-build.sh terrain` builds the elevation tileset instead — same
+   box, same prompts, GDAL in place of Java.
 
 4. **Destroy the server.** Hetzner console → Server → Delete. The R2 credentials
    were in its memory, and deleting the box is the cheapest rotation there is.
@@ -615,7 +622,9 @@ run resumes:
 1. List the swissALTI3D squares over `TERRAIN_BBOX` from swisstopo's STAC API,
    taking the **2 m** GeoTIFF of the four assets on each item, one per square
    kilometre, newest survey wins.
-2. Download them — about 41,000 files, ~42 GB, and the long pole by a distance.
+2. Download them — 43,650 files, ~44 GB, and the long pole by a distance. The
+   catalogue holds about twice that many items: the 2026-09-13 build listed
+   80,485 and dropped 36,835 as superseded.
 3. `gdalwarp` to EPSG:3035 at 5 m with `-r average`. Averaging is the whole
    reason for taking the 2 m source rather than a coarser one.
 4. `gdal_translate` to a flat Int16 ENVI raster, quantised onto the stored scale
@@ -625,9 +634,26 @@ run resumes:
    pure byte slicing — no arithmetic per cell, which is what keeps numpy and
    GDAL's Python bindings out of this repo entirely.
 
-Budget ~100 GB of disk and a few hours, most of it the download. Same advice as
-the basemap: rent a box rather than clearing that much space locally. It wants
-disk and cores, not planetiler's 16 GB of RAM.
+Budget ~100 GB of disk and about **90 minutes**. Measured on 2026-09-13 on a
+CX42 (8 vCPU): roughly 20 minutes to page the catalogue, 20 to download at eight
+parallel curls, and the warp the longest single stage; the quantise and the cut
+are fast by comparison. Peak disk was 56 GB in `work/terrain` alongside 3.5 GB
+of tiles. Same advice as the basemap: rent a box rather than clearing that much
+space locally. It wants disk and cores, not planetiler's 16 GB of RAM.
+
+On a VM that is one command, which installs GDAL, prompts for the R2
+credentials and publishes when the build finishes:
+
+```bash
+./scripts/vm-build.sh terrain
+```
+
+That build covered Switzerland with 43,650 squares surveyed between 2019 and
+2025 — swisstopo re-survey on a six-year cycle, so newest-per-square makes the
+grid a deliberate patchwork of vintages rather than an accidental one. It
+produced a 71,680 × 49,152 cell grid and **27,331 tiles, 3.5 GB**, out of 53,760
+tile slots: the rest are empty because Switzerland is diagonal in a rectangular
+grid, and an absent tile answers 204.
 
 While iterating, build one region — a 66 km² box around Zermatt runs end to end
 in 22 seconds, which makes it a cheap way to prove the whole pipeline before
