@@ -107,7 +107,7 @@ fi
 
 # Both targets want ~100 GB, for different reasons: 28 GB of OSM source plus
 # planetiler's working files, or 44 GB of GeoTIFFs plus a 7 GB warped raster, a
-# 7.1 GB flat grid and 3.5 GB of tiles.
+# 7.1 GB flat grid and 3.6 GB of tiles.
 free_gb=$(df -BG --output=avail . | tail -1 | tr -dc '0-9')
 if [ "${free_gb:-0}" -lt 100 ]; then
     echo "error: ${free_gb} GB free, need ~100 GB for the ${target} build" >&2

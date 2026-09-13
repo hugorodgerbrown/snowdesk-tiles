@@ -27,7 +27,7 @@
 #
 # Sizing, measured over all of Switzerland on 2026-09-13: 43,650 source GeoTIFFs
 # at about 1 MB each (~44 GB), a warped intermediate and a 7.1 GB flat grid —
-# 56 GB of work/terrain all told — and 3.5 GB of tiles (27,331 of them, out of
+# 56 GB of work/terrain all told — and 3.6 GB of tiles (27,331 of them, out of
 # 53,760 slots). Budget 100 GB free and about 90 minutes on 8
 # vCPU — the warp is the longest single stage, and the download is the only one
 # that scales with the number of source squares rather than with area. A 66 km2

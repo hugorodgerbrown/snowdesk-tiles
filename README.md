@@ -548,7 +548,9 @@ below is published in `grid.json` alongside the tiles.
 | Boundary rule | half-open `[south, north)`, `[west, east)` | **Not GDAL's rule.** See below. |
 | Tile indexing | east and north from the CRS origin | Both positive everywhere in Europe, so the Worker's route matches `\d+` and rejects anything else. |
 
-Switzerland and Liechtenstein come to about 26,000 populated tiles and 3.4 GB.
+Switzerland and Liechtenstein come to 27,331 populated tiles and 3.6 GB.
+Every tile that exists is the same 133,128 bytes, so that total is
+arithmetic rather than a measurement — see the build below.
 
 **The stored grid and the analysis window are different numbers.** Slope is a
 derivative over a neighbourhood, so it is the *window* — how far apart the two
@@ -637,7 +639,7 @@ run resumes:
 Budget ~100 GB of disk and about **90 minutes**. Measured on 2026-09-13 on a
 CX42 (8 vCPU): roughly 20 minutes to page the catalogue, 20 to download at eight
 parallel curls, and the warp the longest single stage; the quantise and the cut
-are fast by comparison. Peak disk was 56 GB in `work/terrain` alongside 3.5 GB
+are fast by comparison. Peak disk was 56 GB in `work/terrain` alongside 3.6 GB
 of tiles. Same advice as the basemap: rent a box rather than clearing that much
 space locally. It wants disk and cores, not planetiler's 16 GB of RAM.
 
@@ -651,9 +653,15 @@ credentials and publishes when the build finishes:
 That build covered Switzerland with 43,650 squares surveyed between 2019 and
 2025 — swisstopo re-survey on a six-year cycle, so newest-per-square makes the
 grid a deliberate patchwork of vintages rather than an accidental one. It
-produced a 71,680 × 49,152 cell grid and **27,331 tiles, 3.5 GB**, out of 53,760
+produced a 71,680 × 49,152 cell grid and **27,331 tiles, 3.6 GB**, out of 53,760
 tile slots: the rest are empty because Switzerland is diagonal in a rectangular
 grid, and an absent tile answers 204.
+
+That 3.6 GB is exact, not rounded off a `du`: a tile is a fixed 133,128 bytes
+whether it is Jungfraujoch or Lake Geneva, so the tileset is 27,331 × 133,128 =
+**3,638,521,368 bytes**. Quote it in decimal GB, which is the unit R2 bills in;
+`du -h` reports the same bytes as 3.4 GiB, and reading one number in one unit
+against the other is how this figure came to be written down two different ways.
 
 While iterating, build one region — a 66 km² box around Zermatt runs end to end
 in 22 seconds, which makes it a cheap way to prove the whole pipeline before
@@ -724,7 +732,7 @@ GLO-30 as source number two.
 ### Cost
 
 Storage is the only ongoing cost and it is the reason the grid can be this fine.
-~3.4 GB in R2 is about five cents a month, egress is free, and the writes are
+3.6 GB in R2 is about five cents a month, egress is free, and the writes are
 one-off. There is no dyno, no schedule and nothing to keep alive.
 
 ## Development
