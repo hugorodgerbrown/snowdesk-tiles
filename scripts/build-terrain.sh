@@ -25,11 +25,13 @@
 #     Debian/Ubuntu:  sudo apt-get install -y gdal-bin python3
 #     macOS:          brew install gdal
 #
-# Sizing, for all of Switzerland: ~41,000 source GeoTIFFs at about 1 MB each
-# (~42 GB), a ~7 GB warped intermediate, a 7.1 GB flat grid and ~3.4 GB of
-# tiles. Budget 100 GB free and a few hours, most of it the download — a 66 km2
-# box around Zermatt ran end to end in 22 seconds, and the download is the only
-# stage that scales with the number of source squares rather than with area.
+# Sizing, measured over all of Switzerland on 2026-09-13: 43,650 source GeoTIFFs
+# at about 1 MB each (~44 GB), a warped intermediate and a 7.1 GB flat grid —
+# 56 GB of work/terrain all told — and 3.5 GB of tiles (27,331 of them, out of
+# 53,760 slots). Budget 100 GB free and about 90 minutes on 8
+# vCPU — the warp is the longest single stage, and the download is the only one
+# that scales with the number of source squares rather than with area. A 66 km2
+# box around Zermatt runs end to end in 22 seconds.
 # Every stage is skipped if its output is already there, so an interrupted run
 # resumes; FORCE_TERRAIN=1 redoes the GDAL stages.
 #
