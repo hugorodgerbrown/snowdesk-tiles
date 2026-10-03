@@ -673,7 +673,12 @@ def http_fetcher(terrain_url: str) -> TileFetcher:
 
     def fetch(tile_x: int, tile_y: int) -> bytes | None:
         url = f"{base}/{tile_x}/{tile_y}.s16"
-        with urllib.request.urlopen(url, timeout=30) as response:  # noqa: S310 - scheme checked above
+        # The tile host's Cloudflare zone answers 403 to urllib's default
+        # User-Agent, as OpenFreeMap does (see rewrite_style.py).
+        request = urllib.request.Request(  # noqa: S310 - scheme checked above
+            url, headers={"User-Agent": "snowdesk-tiles"}
+        )
+        with urllib.request.urlopen(request, timeout=30) as response:  # noqa: S310 - scheme checked above
             if response.status == 204:
                 return None
             body: bytes = response.read()
