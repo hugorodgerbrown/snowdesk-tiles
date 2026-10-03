@@ -151,9 +151,32 @@ if mirrored "$TERRAIN_DIR"; then
     fi
 fi
 
+echo "==> terrain-class tiles"
+# Same shape as the elevation tiles: tens of thousands of small immutable
+# objects synced, and the descriptor copied last because it is the pointer the
+# browser reads the contract and the URL template from.
+if mirrored "$TERRAIN_CLASS_DIR"; then
+    s3 sync "${DIST_DIR}/${TERRAIN_CLASS_DIR}" "s3://${R2_BUCKET}/${TERRAIN_CLASS_DIR}" \
+        --exclude 'tiles.json' \
+        --content-type image/png \
+        --cache-control "$IMMUTABLE_CACHE"
+
+    if [ -f "${DIST_DIR}/${TERRAIN_CLASS_DIR}/tiles.json" ]; then
+        echo "    descriptor (published last, after its tiles)"
+        s3 cp "${DIST_DIR}/${TERRAIN_CLASS_DIR}/tiles.json" \
+            "s3://${R2_BUCKET}/${TERRAIN_CLASS_DIR}/tiles.json" \
+            --content-type application/json \
+            --cache-control "$STYLE_CACHE"
+    else
+        echo "    warning: no tiles.json — it carries the pixel contract, so the" >&2
+        echo "             tiles cannot be decoded safely without one" >&2
+    fi
+fi
+
 echo "==> style (published last)"
 # Same rule as the mirror directories, for the same reason: absent means "not
-# rebuilt", never "delete it". build-terrain.sh stages only dist/terrain/, so a
+# rebuilt", never "delete it". build-terrain.sh stages only dist/terrain/ (and
+# build-terrain-class.sh only dist/terrain-class/), so a
 # box that built the tileset has no style to publish, and requiring one would
 # mean mirroring ~1 GB of unchanged assets to get it.
 if [ -f "${DIST_DIR}/styles/liberty" ]; then
@@ -169,8 +192,9 @@ if [ "$published" -eq 0 ]; then
     cat >&2 <<EOF
 error: nothing staged in ${DIST_DIR}/ — published nothing
 
-Run ./scripts/build.sh for the style and the mirrored assets, or
-./scripts/build-terrain.sh for the elevation tileset, then rerun this.
+Run ./scripts/build.sh for the style and the mirrored assets,
+./scripts/build-terrain.sh for the elevation tileset, or
+./scripts/build-terrain-class.sh for the class tiles, then rerun this.
 EOF
     exit 1
 fi
