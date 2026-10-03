@@ -285,6 +285,103 @@ print(json.dumps({k: doc.get(k) for k in keys}, sort_keys=True))
         "$(status "${terrain_url}/-1/-1.s16")"
 fi
 
+# --- Terrain-class tiles (SNOW-987) ------------------------------------------
+#
+# The class tiles' pixels are data, so a broken one does not look broken: a
+# tile cut a row out of place, recompressed, or classified with the wrong window
+# still decodes to plausible slopes. So the pixels are compared with the answer
+# computed from the *elevation* tiles above through the same kernel as
+# sample_slope — the class tileset is checked against the grid SNOW-917 reads,
+# not against itself.
+#
+# TERRAIN_CLASS=0 skips the section, for publishing anything else before the
+# class tiles have ever been built. It is not a way past a failure.
+if [ "${TERRAIN_CLASS:-1}" != "1" ]; then
+    echo
+    echo "  skip  terrain-class checks (TERRAIN_CLASS=0)"
+else
+    echo
+    class_url="${TILES_ORIGIN}/terrain-class/${TERRAIN_CLASS_VERSION}"
+    terrain_url="${TILES_ORIGIN}/terrain/${TERRAIN_VERSION}"
+
+    check "terrain-class descriptor responds" 200 "$(status "${class_url}/tiles.json")"
+    check "terrain-class descriptor is json" "application/json" \
+        "$(content_type "${class_url}/tiles.json")"
+
+    # The pixel contract as published against the one in this repo — the
+    # browser decodes with the published one, so a drift here is a wrong colour
+    # on a slope rather than an error anywhere.
+    class_contract() {
+        python3 -c '
+import json, sys
+doc = json.load(sys.stdin)
+print(json.dumps({k: doc.get(k) for k in ["minzoom", "maxzoom", "tile_size",
+    "format", "encoding"]}, sort_keys=True))
+' 2>/dev/null || echo "<unreadable>"
+    }
+    want_class=$(python3 scripts/terrain_class.py descriptor | class_contract)
+    got_class=$(curl -s "${class_url}/tiles.json" | class_contract)
+    check "terrain-class contract matches scripts/terrain_class.py" \
+        "$want_class" "$got_class"
+
+    # Height, band and octant at named places, each compared with what the
+    # elevation grid says the pixel should hold. `expect` works at the centre of
+    # the z14 pixel the point lands in, not at the point: the warp is
+    # nearest-neighbour, so that is the 5 m cell the pixel was taken from.
+    #
+    # A lake (level ground, and a height known to the metre), a village on a
+    # valley floor, and a north face steep enough to sit in the top bands —
+    # between them every branch of the encoding.
+    classified() {
+        local label=$1 lon=$2 lat=$3
+        local z x y px py want got tile
+
+        read -r z x y px py < <(python3 scripts/terrain_class.py locate "$lon" "$lat" 14)
+        tile="${class_url}/${z}/${x}/${y}.png"
+        check "terrain-class: ${label} tile responds" 200 "$(status "$tile")"
+        check "terrain-class: ${label} tile is png" "image/png" "$(content_type "$tile")"
+
+        # Every pixel of the tile, not only the probe: opaque, a valid class,
+        # no height on a no-data pixel. A tile resampled or re-encoded on its
+        # way out fails here rather than at one unlucky pixel.
+        got=$(curl -s "$tile" | python3 scripts/terrain_class.py check-tile || true)
+        case $got in
+            "ok 0")
+                # Published, but every pixel no data: the cutter never writes
+                # such a tile, so something else put it there.
+                printf '  FAIL  terrain-class: %s tile holds no data at all\n' "$label"
+                failures=$((failures + 1))
+                ;;
+            ok\ *)
+                printf '  ok    terrain-class: %s tile decodes, all opaque (%s data px)\n' \
+                    "$label" "${got#ok }"
+                ;;
+            *)
+                printf '  FAIL  terrain-class: %s tile %s\n' "$label" "$got"
+                failures=$((failures + 1))
+                ;;
+        esac
+
+        want=$(python3 scripts/terrain_class.py expect "$lon" "$lat" 14 \
+            --url "$terrain_url" || true)
+        got=$(curl -s "$tile" | python3 scripts/terrain_class.py read-pixel "$px" "$py" || true)
+        check "terrain-class: ${label} (${got})" "$want" "$got"
+    }
+
+    classified "Lake Geneva surface" 6.5983 46.4436
+    classified "Zermatt village" 7.7491 46.0207
+    classified "Eiger north face" 8.0050 46.5830
+
+    # Outside coverage, and outside the zoom range: both 204, the cacheable
+    # "nothing here", never a 404 and never a pixel.
+    read -r z x y _ _ < <(python3 scripts/terrain_class.py locate 11.3933 47.2692 14)
+    check "terrain-class is 204 outside coverage (Innsbruck)" 204 \
+        "$(status "${class_url}/${z}/${x}/${y}.png")"
+    read -r z x y _ _ < <(python3 scripts/terrain_class.py locate 7.7491 46.0207 11)
+    check "terrain-class is 204 below z12 (Zermatt z11)" 204 \
+        "$(status "${class_url}/${z}/${x}/${y}.png")"
+fi
+
 # Content-Type is fixed at upload time and R2 does not infer it. A wrong one
 # fails inside MapLibre rather than at the HTTP layer, so every status check
 # above can pass while the map renders nothing.

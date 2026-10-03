@@ -40,6 +40,7 @@ from terrain_class import (  # noqa: E402
     WINDOW_STEP_CELLS,
     TerrainClass,
     band_for,
+    check_tile,
     class_byte,
     classify_kernel,
     decode_class_byte,
@@ -531,3 +532,34 @@ def test_a_kernel_at_a_tile_corner_reads_its_neighbours() -> None:
         }
     )
     assert len(calls) == 4  # each tile fetched once
+
+
+def test_check_tile_counts_data_pixels() -> None:
+    rows = [bytes((6, 67, 65, 255)) * 256] + [bytes(NODATA_PIXEL) * 256] * 255
+
+    assert check_tile(png(rows)) == 256
+
+
+def test_check_tile_finds_one_bad_pixel() -> None:
+    rows = [bytes(NODATA_PIXEL) * 256] * 256
+    rows[200] = bytes(NODATA_PIXEL) * 100 + bytes((6, 67, 65, 254)) + rows[200][104:]
+
+    with pytest.raises(ValueError, match="alpha"):
+        check_tile(png(rows))
+
+
+def test_check_tile_wants_a_whole_tile() -> None:
+    with pytest.raises(ValueError, match="square"):
+        check_tile(png([bytes(NODATA_PIXEL)]))
+
+
+def test_check_tile_cli(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    class Stdin:
+        buffer = io.BytesIO(png([bytes(NODATA_PIXEL) * 256] * 256))
+
+    monkeypatch.setattr(sys, "stdin", Stdin)
+
+    assert main(["check-tile"]) == 0
+    assert capsys.readouterr().out.strip() == "ok 0"

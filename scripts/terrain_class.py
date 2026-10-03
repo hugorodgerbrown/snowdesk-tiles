@@ -62,8 +62,10 @@ Usage:
     python scripts/terrain_class.py locate 7.7491 46.0207 14
     python scripts/terrain_class.py expect 7.7491 46.0207 14 \
         --terrain-url https://tiles.snowdesk-data.info/terrain/v1
-    curl -s .../terrain-class/v1/14/8544/5800.png \
-        | python scripts/terrain_class.py read-pixel 133 71
+    curl -s .../terrain-class/v1/14/8544/5827.png \
+        | python scripts/terrain_class.py read-pixel 171 113
+    curl -s .../terrain-class/v1/14/8544/5827.png \
+        | python scripts/terrain_class.py check-tile
 """
 
 from __future__ import annotations
@@ -735,6 +737,35 @@ def _cmd_read_pixel(args: argparse.Namespace) -> int:
     return 0
 
 
+def check_tile(body: bytes) -> int:
+    """Decode every pixel of a tile and return how many carry data.
+
+    Raises on the first pixel that breaks the contract — a translucent one, a
+    class byte no encoder writes, a no-data pixel carrying a height — which is
+    what a tile re-encoded, resampled or composited on its way out looks like.
+    """
+    width, height, rows = read_png_rgba(body)
+    if (width, height) != (TILE_PIXELS, TILE_PIXELS):
+        raise ValueError(f"tile is {width}x{height}, not {TILE_PIXELS} square")
+    data = 0
+    for row in rows:
+        for offset in range(0, len(row), 4):
+            r, g, b, a = row[offset : offset + 4]
+            if not decode_pixel(r, g, b, a).is_nodata:
+                data += 1
+    return data
+
+
+def _cmd_check_tile(args: argparse.Namespace) -> int:
+    try:
+        data = check_tile(sys.stdin.buffer.read())
+    except (ValueError, zlib.error) as error:
+        print(f"broken: {error}")
+        return 1
+    print(f"ok {data}")
+    return 0
+
+
 def _cmd_expect(args: argparse.Namespace) -> int:
     try:
         print(expected_class(args.lon, args.lat, args.zoom, http_fetcher(args.url)))
@@ -782,6 +813,9 @@ def main(argv: list[str] | None = None) -> int:
     p_read.add_argument("px", type=int)
     p_read.add_argument("py", type=int)
     p_read.set_defaults(func=_cmd_read_pixel)
+
+    p_chk = sub.add_parser("check-tile", help="decode every pixel of a PNG on stdin")
+    p_chk.set_defaults(func=_cmd_check_tile)
 
     p_exp = sub.add_parser(
         "expect", help="the class a pixel should hold, from the elevation tiles"
