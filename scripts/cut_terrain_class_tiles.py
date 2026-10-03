@@ -123,8 +123,33 @@ class MercatorRaster:
             if not has_data:
                 has_data = line[2::PIXEL_BYTES] != NODATA_ROW
             rows.append(line)
-        check_no_gap_rows(uncovered, index_x, index_y)
+        above: list[bool] = []
+        below: list[bool] = []
+        if not all(uncovered) and (uncovered[0] or uncovered[-1]):
+            # An empty run touching the tile's top or bottom edge may continue
+            # a gap that has ground on the far side of the boundary, so look up
+            # to one tile's height into the neighbouring raster rows.
+            top = index_y * TILE_PIXELS
+            if uncovered[0]:
+                above = [
+                    self._uncovered(raster_row, index_x)
+                    for raster_row in range(max(0, top - TILE_PIXELS), top)
+                ]
+            if uncovered[-1]:
+                bottom = top + TILE_PIXELS
+                below = [
+                    self._uncovered(raster_row, index_x)
+                    for raster_row in range(
+                        bottom, min(self.extent.height, bottom + TILE_PIXELS)
+                    )
+                ]
+        check_no_gap_rows(above + uncovered + below, index_x, index_y, len(above))
         return rows if has_data else None
+
+    def _uncovered(self, raster_row: int, index_x: int) -> bool:
+        """Return whether one raster row is wholly uncovered under a tile column."""
+        start = (raster_row * self.extent.width + index_x * TILE_PIXELS) * PIXEL_BYTES
+        return self._map[start + 3 : start + ROW_BYTES : PIXEL_BYTES] == TRANSPARENT_ROW
 
 
 def uncover(line: bytes, index_x: int, index_y: int, row: int) -> bytes:
@@ -185,7 +210,9 @@ def check_nodata(line: bytes, index_x: int, index_y: int, row: int) -> None:
         index = classes.find(NO_DATA, index + 1)
 
 
-def check_no_gap_rows(uncovered: list[bool], index_x: int, index_y: int) -> None:
+def check_no_gap_rows(
+    uncovered: list[bool], index_x: int, index_y: int, first: int = 0
+) -> None:
     """Refuse a tile with a wholly uncovered row between covered rows.
 
     Coverage is the union of 1 km source squares, so its edge is never a
@@ -193,14 +220,20 @@ def check_no_gap_rows(uncovered: list[bool], index_x: int, index_y: int) -> None
     empty between covered rows is a raster that was not wholly written, as
     the first live z14 raster was across Switzerland, and would show as
     no-data stripes on the map.
+
+    ``uncovered`` may carry raster rows from the tiles above and below, so a
+    gap that straddles a tile boundary is caught. The tile's own row 0 is
+    ``uncovered[first]``, and only the tile's own rows are reported.
     """
     covered = [index for index, empty in enumerate(uncovered) if not empty]
     if not covered:
         return
-    for row in range(covered[0], covered[-1] + 1):
-        if uncovered[row]:
+    for index in range(
+        max(covered[0], first), min(covered[-1], first + TILE_PIXELS - 1) + 1
+    ):
+        if uncovered[index]:
             raise ValueError(
-                f"tile ({index_x}, {index_y}) row {row} is wholly uncovered "
+                f"tile ({index_x}, {index_y}) row {index - first} is wholly uncovered "
                 "between covered rows — the raster is incomplete; re-warp this zoom"
             )
 

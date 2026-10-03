@@ -226,6 +226,28 @@ def test_a_dropped_row_between_covered_rows_is_refused(tmp_path: Path) -> None:
         raster.close()
 
 
+def test_a_dropped_row_on_a_tile_boundary_is_refused(tmp_path: Path) -> None:
+    # Row 0 of the data tile, with ground in the tile above it: a gap across
+    # the boundary, not the edge of coverage.
+    extent = mercator_extent(*BBOX_T, ZOOM)
+    path = build_raster(tmp_path)
+    body = bytearray(path.read_bytes())
+    above = DATA_TILE[1] * 256 - 1
+    start = (above * extent.width + DATA_TILE[0] * 256) * 4
+    body[start : start + 256 * 4] = bytes(encode_pixel(1500, 3)) * 256
+    row = DATA_TILE[1] * 256
+    start = (row * extent.width + DATA_TILE[0] * 256) * 4
+    body[start : start + 256 * 4] = bytes([0, 0, 255, 0]) * 256
+    path.write_bytes(bytes(body))
+
+    raster = MercatorRaster(path, extent)
+    try:
+        with pytest.raises(ValueError, match="row 0 is wholly uncovered"):
+            raster.tile(*DATA_TILE)
+    finally:
+        raster.close()
+
+
 def test_uncovered_rows_at_a_tile_edge_are_not_a_gap(tmp_path: Path) -> None:
     # Coverage that starts part way down a tile is an edge, not a dropped row.
     extent = mercator_extent(*BBOX_T, ZOOM)
