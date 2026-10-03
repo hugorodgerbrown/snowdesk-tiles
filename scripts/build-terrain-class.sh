@@ -67,6 +67,20 @@ vrt="${work}/classes.vrt"
 out="${DIST_DIR}/${TERRAIN_CLASS_DIR}"
 force=${FORCE_TERRAIN_CLASS:-0}
 
+# One build at a time per work directory. Two builds running together each
+# clear and rewrite the other's half-written raster, and the first live z14
+# raster came out with dropped rows and stray bytes in the same run that its
+# log shows two builds' output interleaved. flock is util-linux; where it is
+# missing (macOS) the build runs unguarded, as before.
+mkdir -p "$work"
+if command -v flock >/dev/null 2>&1; then
+    exec 9>"${work}/.build.lock"
+    flock -n 9 || {
+        echo "error: another terrain-class build holds ${work}/.build.lock — wait for it, or stop it" >&2
+        exit 1
+    }
+fi
+
 if [ ! -s "$raw" ] || [ ! -s "$manifest" ]; then
     cat >&2 <<EOF
 error: ${raw} or ${manifest} is missing
