@@ -396,6 +396,9 @@ def test_build_terrain_class_end_to_end(tmp_path: Path) -> None:
         "TERRAIN_WORK_DIR": str(terrain_work),
         "TERRAIN_CLASS_WORK_DIR": str(tmp_path / "work" / "terrain-class"),
         "DIST_DIR": str(tmp_path / "dist"),
+        # One tile row per strip, so every zoom is warped in several strips and
+        # the join is exercised, not just a single-strip copy.
+        "TERRAIN_CLASS_STRIP_TILES": "1",
     }
     subprocess.run(  # noqa: S603
         ["/bin/bash", str(ROOT / "scripts" / "build-terrain-class.sh")],
