@@ -152,6 +152,13 @@ for zoom in $zooms; do
     # INIT_DEST=0 makes every uncovered pixel all zeros, which is what the
     # cutter rewrites to the contract's no-data pixel.
     #
+    # No -multi. It reads the next chunk while the last is being warped, and
+    # with GDAL 3.8.4 and these three raw planes that produced z14 pixels
+    # whose R, G and B came from different cells: no data under a height,
+    # displaced heights and aspects, and whole rows left empty, and did it again
+    # on a clean single run. NUM_THREADS still spreads the warp itself across
+    # every core.
+    #
     # ENVI with INTERLEAVE=BIP is a flat RGBA array — exactly the byte layout of
     # a PNG row, so the cutter slices bytes with no decoder at all.
     tmp="${work}/.warp-z${zoom}"
@@ -166,7 +173,7 @@ for zoom in $zooms; do
         -ot Byte \
         -dstalpha \
         -wo INIT_DEST=0 \
-        -multi -wo NUM_THREADS=ALL_CPUS -wm 1024 \
+        -wo NUM_THREADS=ALL_CPUS -wm 1024 \
         -of ENVI -co INTERLEAVE=BIP \
         "$vrt" "${tmp}/${name}"
 
