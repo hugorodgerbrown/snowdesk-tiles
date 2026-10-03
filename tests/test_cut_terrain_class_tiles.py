@@ -11,6 +11,9 @@ the cutter's arithmetic.
 from __future__ import annotations
 
 import json
+import os
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -220,3 +223,82 @@ def test_main_refuses_a_zoom_the_worker_will_not_serve(tmp_path: Path) -> None:
             ["--work", str(tmp_path), "--manifest", "m", "--out", str(tmp_path)]
             + ["--zooms", "11"]
         )
+
+
+# --- End to end, when GDAL is installed -------------------------------------
+
+
+@pytest.mark.skipif(shutil.which("gdalwarp") is None, reason="GDAL not installed")
+def test_build_terrain_class_end_to_end(tmp_path: Path) -> None:
+    """Run the real build over synthetic ground and compare pixels with the grid.
+
+    The one test that exercises gdalwarp: the VRT's georeferencing, nearest
+    resampling, the exact transformer, the alpha band and the BIP layout all
+    have to be right for a pixel to land on the cell ``expected_class`` names.
+    It is the test-suite version of what verify.sh does against the live origin.
+    """
+    np = pytest.importorskip("numpy")
+    from cut_terrain_tiles import Raster
+    from cut_terrain_tiles import cut as cut_elevation
+    from terrain_class import describe, expected_class, locate
+    from terrain_grid import (
+        CELL_SIZE_M,
+        NODATA,
+        TILE_CELLS,
+        lonlat_extent,
+        snap_extent,
+    )
+
+    extent = snap_extent(*lonlat_extent(*BBOX_T))
+    cols = (extent.east - extent.west) // CELL_SIZE_M
+    rows = (extent.north - extent.south) // CELL_SIZE_M
+    row_index, col_index = np.mgrid[0:rows, 0:cols].astype(np.float64)
+    metres = 2400.0 + 300.0 * np.sin(row_index / 37.0) * np.cos(col_index / 53.0)
+    stored = np.round(metres / 0.25).astype("<i2")
+    # The margin ring holds no ground, as it does in a real build.
+    stored[:TILE_CELLS] = stored[-TILE_CELLS:] = NODATA
+    stored[:, :TILE_CELLS] = stored[:, -TILE_CELLS:] = NODATA
+
+    terrain_work = tmp_path / "work" / "terrain"
+    terrain_work.mkdir(parents=True)
+    (terrain_work / "grid.raw").write_bytes(stored.tobytes())
+    (terrain_work / "manifest.json").write_text(json.dumps({"bbox": BBOX}))
+
+    env = {
+        **os.environ,
+        "PYTHON": sys.executable,
+        "TERRAIN_WORK_DIR": str(terrain_work),
+        "TERRAIN_CLASS_WORK_DIR": str(tmp_path / "work" / "terrain-class"),
+        "DIST_DIR": str(tmp_path / "dist"),
+    }
+    subprocess.run(  # noqa: S603
+        ["/bin/bash", str(ROOT / "scripts" / "build-terrain-class.sh")],
+        env=env,
+        cwd=ROOT,
+        check=True,
+    )
+    out = tmp_path / "dist" / "terrain-class"
+    assert json.loads((out / "tiles.json").read_text())["tile_count"] > 0
+
+    # The elevation tiles the same grid would publish, read back the way the
+    # live origin serves them: absent is None, which is a 204.
+    elevation = tmp_path / "terrain-tiles"
+    raster = Raster(terrain_work / "grid.raw", extent.west, extent.north, cols, rows)
+    try:
+        cut_elevation(raster, elevation)
+    finally:
+        raster.close()
+
+    def fetch(tile_x: int, tile_y: int) -> bytes | None:
+        path = elevation / str(tile_x) / f"{tile_y}.s16"
+        return path.read_bytes() if path.exists() else None
+
+    west, south, east, north = BBOX_T
+    for step_x in range(5):
+        for step_y in range(5):
+            lon = west + (east - west) * (step_x + 0.5) / 5
+            lat = south + (north - south) * (step_y + 0.5) / 5
+            zoom, tile_x, tile_y, px, py = locate(lon, lat, 14)
+            tile = out / str(zoom) / str(tile_x) / f"{tile_y}.png"
+            got = describe(read_pixel(tile.read_bytes(), px, py))
+            assert got == expected_class(lon, lat, 14, fetch), (lon, lat)

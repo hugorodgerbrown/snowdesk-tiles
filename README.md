@@ -12,7 +12,10 @@ runbook.
 The same origin also serves a **terrain elevation grid** — Int16 heights on a
 5 m grid, sampled per point by Django rather than rendered by MapLibre
 ([SNOW-908](https://linear.app/hugorodgerbrown/issue/SNOW-908)). It is a
-separate, one-off pipeline with its own section at the bottom.
+separate, one-off pipeline with its own section at the bottom, and so is the
+**terrain-class tileset** derived from it — height, slope band and aspect
+octant per pixel, as PNG map tiles the browser reads
+([SNOW-987](https://linear.app/hugorodgerbrown/issue/SNOW-987)).
 
 The Django side (the `OPENFREEMAP_STYLE_URL` env var and the CSP `connect-src`
 entry) lives in `snowdesk-data-pipeline` under SNOW-242.
@@ -33,8 +36,12 @@ entry) lives in `snowdesk-data-pipeline` under SNOW-242.
 | `scripts/fetch_swissalti3d.py` | Lists the swissALTI3D squares over a box, from swisstopo's STAC API. |
 | `scripts/cut_terrain_tiles.py` | Cuts the warped raster into skirted Int16 tiles, and writes `grid.json`. |
 | `scripts/build-terrain.sh` | Runs the three above plus GDAL → `dist/terrain/`. One-off; needs ~100 GB. |
+| `scripts/terrain_class.py` | The terrain-class pixel contract and kernel (a copy of `sample_slope`'s). |
+| `scripts/classify_terrain.py` | Classifies `grid.raw` into three EPSG:3035 class planes. The one numpy script. |
+| `scripts/cut_terrain_class_tiles.py` | Cuts the warped class rasters into PNG tiles, and writes `tiles.json`. |
+| `scripts/build-terrain-class.sh` | Runs the two above plus `gdalwarp` → `dist/terrain-class/`. After `build-terrain.sh`. |
 | `scripts/verify.sh` | Acceptance checks against the live origin. |
-| `worker/` | Worker serving XYZ tiles, and the CORS allowlist (`ALLOWED_ORIGINS`). |
+| `worker/` | Worker serving XYZ tiles, and the CORS allowlist (`ALLOWED_ORIGINS`). `npm test` runs its routing tests. |
 
 ## Why R2 and not an origin server
 
@@ -84,6 +91,11 @@ The Worker (`worker/`) owns the hostname and answers everything:
   `404`: most of the Alps has no source yet, so "nothing covers this ground" is
   an ordinary, cacheable answer rather than an error. `/terrain/<version>/grid.json`
   is the grid definition.
+- `/terrain-class/<version>/{z}/{x}/{y}.png` — class tiles, the same way:
+  version stripped, `image/png`, an absent tile or a zoom outside 12–14
+  answering `204`. `/terrain-class/<version>/tiles.json` is the descriptor and
+  the pixel contract. Both bucket-backed tilesets are one table in
+  `worker/src/tilesets.js`.
 - Everything else — style, sprites, glyphs, the Natural Earth raster — passed
   through to the bucket, returning each object's stored `Content-Type` and
   `Cache-Control` (the values `upload.sh` set; R2 infers neither).
@@ -189,7 +201,8 @@ with 160 GB and 16 GB RAM will do.
    failed on the image recommended right above.
 
    `./scripts/vm-build.sh terrain` builds the elevation tileset instead — same
-   box, same prompts, GDAL in place of Java.
+   box, same prompts, GDAL in place of Java — and `terrain-class` the class
+   tiles derived from it (see the terrain section).
 
 4. **Destroy the server.** Hetzner console → Server → Delete. The R2 credentials
    were in its memory, and deleting the box is the cheapest rotation there is.
@@ -634,7 +647,8 @@ run resumes:
    so the encoding cannot drift from the encoding SNOW-917 decodes with.
 5. Cut tiles. Because the raster arrives pre-quantised and tile-aligned, this is
    pure byte slicing — no arithmetic per cell, which is what keeps numpy and
-   GDAL's Python bindings out of this repo entirely.
+   GDAL's Python bindings out of the elevation build entirely. (The class
+   tiles below do need numpy, for their one compute step.)
 
 Budget ~100 GB of disk and about **90 minutes**. Measured on 2026-09-13 on a
 CX42 (8 vCPU): roughly 20 minutes to page the catalogue, 20 to download at eight
@@ -712,6 +726,90 @@ coordinate; comparing against known ground is the only thing that catches it.
 basemap-only change before the terrain build has ever been run — not a way past
 a failure.
 
+### The terrain-class tiles
+
+The elevation grid answers one point at a time, which is the right shape for
+Django scoring a route and the wrong one for a browser that wants the slope
+under every pixel on screen. So [SNOW-987] precomputes it: every 5 m cell's
+height, slope band and aspect octant, warped to Web Mercator and cut as ordinary
+256 px PNG tiles at **z12–14**, served at `/terrain-class/<version>/{z}/{x}/{y}.png`.
+The pixels are data, not colour.
+
+[SNOW-987]: https://linear.app/hugorodgerbrown/issue/SNOW-987
+
+| Channel | Holds |
+|---|---|
+| R, G | Height in whole metres, uint16 big-endian (R the high byte): `floor(stored × 0.25 + 0.5)`. |
+| B | `octant << 5 \| band` — octant N=0 … NW=7, band = `floor(angle / 5)` in 0–17. |
+| B = 254 | Level ground: the kernel is exactly flat, so there is no aspect. R, G still carry the height. |
+| B = 255 | No data — no height, or a kernel with a hole in it. R = G = 0. Never level ground. |
+| A | Always 255. A canvas premultiplies alpha, which would round data channels. |
+
+The largest real class is `7 << 5 | 17` = 241, so 254 and 255 cannot collide.
+`scripts/terrain_class.py` is the definition and `tiles.json` publishes it.
+
+**The classes are `sample_slope`'s, exactly.** The kernel is a copy of
+`_horn` in snowdesk-data-pipeline's `apps/locations/services/terrain.py`, run as
+`sample_slope` runs it at its default 10 m window — Horn 3×3 over cells two
+apart on the 5 m grid, one nodata cell voiding the kernel — and the octants are
+a copy of `apps/core/geo.py`'s `octant_for`. A pixel that disagreed with a point
+sample would put two answers on one screen. The tests pin the copy to the data
+pipeline's own literal answer at Zermatt (8.111279°, facing 105.255119°).
+
+Three decisions that are not visible in the output:
+
+1. **The input is `grid.raw`, not `warped.tif`.** The GeoTIFF is the same ground
+   in Float32 before quantisation, up to 0.125 m off the stored heights — enough
+   to move an angle over a band edge. `grid.raw` is byte for byte what the
+   published `.s16` tiles were cut from.
+2. **Classify in EPSG:3035, then warp.** `sample_slope` differences 3035 cells;
+   slope computed on Mercator pixels would be a number no point sample
+   reproduces. The warp is `-r near` (averaging two class bytes makes a third
+   that describes neither cell), with the exact transformer (`-et 0`), and an
+   alpha band rather than a nodata value, because every byte value is a code.
+3. **numpy, for the classifier only.** Three billion kernels is not a job for a
+   Python loop, so numpy is an optional `build` extra (`python3-numpy` on the
+   VM). numpy's `arctan`/`hypot` may differ from CPython's `math` in the last
+   bit, so the rare cell within 1e-9° of a band or octant edge is recomputed
+   with the scalar kernel — the planes equal the scalar answer at every cell.
+   The contract module and the cutter stay stdlib; the PNGs are written with
+   `zlib` and `struct`.
+
+#### Build and publish
+
+```bash
+./scripts/build-terrain.sh          # if work/terrain/grid.raw is not already there
+./scripts/build-terrain-class.sh
+(cd worker && npx wrangler deploy)  # once: the /terrain-class/ route
+op run --env-file=.env.1password -- ./scripts/upload.sh
+./scripts/verify.sh
+```
+
+On a VM, `./scripts/vm-build.sh terrain-class` does the lot bar the Worker
+deploy, building the elevation grid first if the box has no `grid.raw`. That
+grid is used as input only: its staged tiles are dropped before the upload, so
+a class build never replaces the live elevation grid.
+
+Every stage resumes; `FORCE_TERRAIN_CLASS=1` redoes them. Sizing is an
+estimate until the first full build reports it: ~10.6 GB of class planes and
+~10 GB of Mercator rasters in `work/terrain-class` on top of `work/terrain`, and
+roughly 20,000 tiles at 0.8–1.8 GB. The cutter prints the real tile count and
+byte total. Tiles with no data pixel are not written; the Worker answers 204.
+
+`upload.sh` syncs the PNGs as `image/png`, immutable, and copies `tiles.json`
+last with the one-hour TTL. `TERRAIN_CLASS_VERSION` is in the URL for the same
+reason `TERRAIN_VERSION` is — bump it for any change to the contract or the
+kernel, not just the heights.
+
+`verify.sh` checks the descriptor against `terrain_class.py`, decodes every
+pixel of three z14 tiles (a lake, Zermatt, the Eiger's north face) to confirm
+they are opaque and valid, and compares the probed pixel with the class
+computed **from the live elevation tiles** through the same kernel — so the
+class tileset is checked against the grid SNOW-917 samples, not against itself.
+It compares at the centre of the z14 pixel, not the probe point: a pixel
+(~6.6 m) carries the one 5 m cell its centre lands in. Innsbruck and z11 must
+answer 204. `TERRAIN_CLASS=0 ./scripts/verify.sh` skips the section.
+
 ### Coverage, and what is honestly missing
 
 The grid is Alps-wide from day one and only the Swiss part has data in it.
@@ -742,7 +840,16 @@ tox
 ```
 
 Runs formatting, lint, type-check and tests. The Python here is stdlib-only
-operational tooling — no Django, no runtime dependencies.
+operational tooling — no Django, no runtime dependencies — with one exception:
+`classify_terrain.py` needs numpy, which is the optional `build` extra
+(`pip install '.[build]'`) and is installed into the tox envs.
+
+```bash
+cd worker && npm test
+```
+
+Runs the Worker's routing tests with `node --test`. They import nothing but the
+tileset table, so they need no `npm install`.
 
 ## Licence
 
