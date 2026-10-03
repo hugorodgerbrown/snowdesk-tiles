@@ -167,6 +167,31 @@ def test_partial_alpha_is_refused(tmp_path: Path) -> None:
         raster.close()
 
 
+def test_a_transparent_pixel_with_colour_becomes_nodata(tmp_path: Path) -> None:
+    # What GDAL 3.8 wrote across the uncovered edge of the live z14 warp: the
+    # colour kept, the alpha cleared. Two such pixels open the data tile's
+    # first row, beside real classes the rewrite must leave alone.
+    extent = mercator_extent(*BBOX_T, ZOOM)
+    path = build_raster(tmp_path)
+    body = bytearray(path.read_bytes())
+    start = (DATA_TILE[1] * 256 * extent.width + DATA_TILE[0] * 256) * 4
+    body[start + 4 : start + 8] = bytes([0, 0, 255, 0])
+    body[start + 8 : start + 12] = bytes([7, 9, 42, 0])
+    path.write_bytes(bytes(body))
+
+    raster = MercatorRaster(path, extent)
+    try:
+        rows = raster.tile(*DATA_TILE)
+    finally:
+        raster.close()
+
+    assert rows is not None
+    assert rows[0][4:12] == bytes(NODATA_PIXEL) * 2
+    assert rows[0][0:4] == pixel_for(0, 0)
+    assert rows[0][12:16] == pixel_for(3, 0)
+    assert rows[0][3::4] == b"\xff" * 256
+
+
 def test_a_raster_of_the_wrong_size_is_refused(tmp_path: Path) -> None:
     path = tmp_path / "short.raw"
     path.write_bytes(b"\0" * 16)

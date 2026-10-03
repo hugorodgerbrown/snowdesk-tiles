@@ -113,17 +113,39 @@ class MercatorRaster:
             start *= PIXEL_BYTES
             line = self._map[start : start + ROW_BYTES].replace(UNCOVERED, NODATA_BYTES)
             if line[3::PIXEL_BYTES] != OPAQUE_ROW:
-                # Partial alpha means something other than a nearest-neighbour
-                # warp produced this raster, and the colour channels have been
-                # blended with it — they are no longer classes.
-                raise ValueError(
-                    f"tile ({index_x}, {index_y}) row {row} has an alpha other "
-                    "than 0 or 255 — was the warp not -r near?"
-                )
+                line = uncover(line, index_x, index_y, row)
             if not has_data:
                 has_data = line[2::PIXEL_BYTES] != NODATA_ROW
             rows.append(line)
         return rows if has_data else None
+
+
+def uncover(line: bytes, index_x: int, index_y: int, row: int) -> bytes:
+    """Rewrite every alpha-0 pixel in one row to the no-data pixel.
+
+    The fast path in ``MercatorRaster.tile`` only catches uncovered pixels the
+    warper left as all zeros. GDAL does not always: on the z14 warp of the
+    first live build it wrote source no-data cells as (0, 0, 255, 0), keeping
+    the colour and clearing the alpha. Alpha 0 is the warper saying no source
+    cell lies under the pixel, so the colour it left there means nothing.
+    Walked pixel by pixel, which only rows at the edge of coverage pay for.
+    """
+    alphas = line[3::PIXEL_BYTES]
+    pixels = bytearray(line)
+    for index, alpha in enumerate(alphas):
+        if alpha == ALPHA:
+            continue
+        if alpha != 0:
+            # Partial alpha means something other than a nearest-neighbour
+            # warp produced this raster, and the colour channels have been
+            # blended with it — they are no longer classes.
+            raise ValueError(
+                f"tile ({index_x}, {index_y}) row {row} has an alpha other "
+                "than 0 or 255 — was the warp not -r near?"
+            )
+        offset = index * PIXEL_BYTES
+        pixels[offset : offset + PIXEL_BYTES] = NODATA_BYTES
+    return bytes(pixels)
 
 
 def png(rows: list[bytes]) -> bytes:
