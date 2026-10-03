@@ -150,6 +150,39 @@ fi
 # and still saturates a normal link.
 : "${TERRAIN_JOBS:=8}"
 
+# --- Terrain-class tileset (SNOW-987) ---------------------------------------
+#
+# A third set of objects on the origin, derived from the elevation grid above:
+# every 5 m cell's height, slope band and aspect octant, warped to Web Mercator
+# and cut as PNG map tiles the browser can read pixel by pixel. As with the
+# grid, the encoding is not configurable here — it lives in
+# scripts/terrain_class.py and is published in tiles.json, because the browser
+# decodes it.
+
+# Version segment in the class tile URLs. Same job and same rule as
+# TERRAIN_VERSION: tiles are immutable for a year, so a rebuild under a fixed
+# URL is invisible. The Worker strips it and reads terrain-class/{z}/{x}/{y}.png
+# from the bucket, so a bump needs no Worker deploy.
+#
+# Bump it for any change to the pixel contract or the kernel, not only to the
+# heights underneath: a pixel decoded under the wrong contract is a wrong slope
+# colour, not an error.
+: "${TERRAIN_CLASS_VERSION:=v1}"
+
+# Subdirectory of DIST_DIR, and the bucket prefix.
+: "${TERRAIN_CLASS_DIR:=terrain-class}"
+
+# The class planes and the warped Mercator rasters: ~20 GB for Switzerland on
+# top of TERRAIN_WORK_DIR, all disposable once the tiles are published.
+: "${TERRAIN_CLASS_WORK_DIR:=work/terrain-class}"
+
+# Zoom levels built. NOT a free choice: the Worker answers 204 outside z12-14
+# and terrain_class.py publishes the same range in tiles.json, so these may
+# narrow the build (to iterate on one level, say) but never widen it.
+# tests/test_config.py pins the defaults to the other two.
+: "${TERRAIN_CLASS_MIN_ZOOM:=12}"
+: "${TERRAIN_CLASS_MAX_ZOOM:=14}"
+
 # Upstream OpenFreeMap origin the assets are mirrored from.
 : "${UPSTREAM_ORIGIN:=https://tiles.openfreemap.org}"
 : "${UPSTREAM_STYLE_URL:=${UPSTREAM_ORIGIN}/styles/liberty}"
@@ -169,3 +202,5 @@ export IMMUTABLE_CACHE STYLE_CACHE TILE_PATH TILE_VERSION PLANETILER_BOUNDS
 export TILE_MIN_ZOOM TILE_MAX_ZOOM
 export TERRAIN_VERSION TERRAIN_TILE_PATH TERRAIN_DIR TERRAIN_BBOX TERRAIN_GSD
 export TERRAIN_WORK_DIR TERRAIN_JOBS
+export TERRAIN_CLASS_VERSION TERRAIN_CLASS_DIR TERRAIN_CLASS_WORK_DIR
+export TERRAIN_CLASS_MIN_ZOOM TERRAIN_CLASS_MAX_ZOOM

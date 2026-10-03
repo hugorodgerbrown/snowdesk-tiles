@@ -5,6 +5,11 @@ description = "Build and publish the self-hosted OpenFreeMap basemap for Snowdes
 requires-python = ">=3.12"
 dependencies = []
 
+[project.optional-dependencies]
+# Only classify_terrain.py needs it (SNOW-987): a slope kernel over three
+# billion cells is not a job for a Python loop. Everything else stays stdlib.
+build = ["numpy"]
+
 [tool.ruff]
 line-length = 88
 target-version = "py312"

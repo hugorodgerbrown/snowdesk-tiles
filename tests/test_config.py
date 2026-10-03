@@ -12,11 +12,15 @@ from __future__ import annotations
 
 import re
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
 CONFIG = Path(__file__).resolve().parents[1] / "scripts" / "config.sh"
+sys.path.insert(0, str(CONFIG.parent))
+
+from terrain_class import MAX_ZOOM, MIN_ZOOM  # noqa: E402
 
 # Every name config.sh promises the other scripts, read off its own export
 # lines rather than listed here, so a name added to one and not the other is
@@ -109,3 +113,15 @@ def test_terrain_bbox_is_four_numbers() -> None:
 
     assert len(parts) == 4
     assert all(float(part) for part in parts)
+
+
+def test_terrain_class_zooms_match_the_contract_and_the_worker() -> None:
+    # Three statements of one range, in shell, Python and JavaScript. A build
+    # wider than the Worker's range publishes tiles that are never served; one
+    # narrower than tiles.json claims leaves MapLibre asking for 204s.
+    worker = (CONFIG.parents[1] / "worker" / "src" / "tilesets.js").read_text()
+
+    assert int(config_value("TERRAIN_CLASS_MIN_ZOOM")) == MIN_ZOOM
+    assert int(config_value("TERRAIN_CLASS_MAX_ZOOM")) == MAX_ZOOM
+    assert f"minZoom: {MIN_ZOOM}," in worker
+    assert f"maxZoom: {MAX_ZOOM}," in worker

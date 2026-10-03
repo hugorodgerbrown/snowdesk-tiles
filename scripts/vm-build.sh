@@ -4,6 +4,7 @@
 #
 #     ./snowdesk-tiles/scripts/vm-build.sh            # the vector tile archive
 #     ./snowdesk-tiles/scripts/vm-build.sh terrain    # the elevation tileset
+#     ./snowdesk-tiles/scripts/vm-build.sh terrain-class   # the class tiles
 #
 # Run this ON the VM, not on your laptop. The point is that the tens of GB of
 # source, the working files and the finished output never touch your machine —
@@ -13,7 +14,9 @@
 # alone. The basemap uploads a single object: the style names the tile URL
 # template rather than the archive, and the Worker resolves the archive through
 # PMTILES_KEY, so nothing else changes. Terrain uploads its tiles and grid.json
-# through upload.sh, which publishes only what is staged in dist/.
+# through upload.sh, which publishes only what is staged in dist/. terrain-class
+# is derived from the elevation grid, so on a fresh box it builds that first —
+# as an input only; see below.
 #
 #     git clone https://github.com/hugorodgerbrown/snowdesk-tiles.git
 #     ./snowdesk-tiles/scripts/vm-build.sh
@@ -33,9 +36,9 @@ set -euo pipefail
 
 target=${1:-basemap}
 case $target in
-    basemap | terrain) ;;
+    basemap | terrain | terrain-class) ;;
     *)
-        echo "usage: $0 [basemap|terrain]" >&2
+        echo "usage: $0 [basemap|terrain|terrain-class]" >&2
         exit 2
         ;;
 esac
@@ -98,19 +101,25 @@ if command -v apt-get >/dev/null 2>&1; then
     case $target in
         basemap) sudo apt-get install -y -qq openjdk-21-jre-headless curl unzip ;;
         terrain) sudo apt-get install -y -qq gdal-bin python3 curl unzip ;;
+        # numpy for the classifier, the one script in the repo that needs it.
+        terrain-class) sudo apt-get install -y -qq gdal-bin python3 python3-numpy curl unzip ;;
     esac
     install_aws_cli
 else
     echo "warning: not a Debian/Ubuntu host — install the dependencies yourself" >&2
     echo "         basemap: Java 21 + awscli v2; terrain: GDAL + Python 3.12 + awscli v2" >&2
+    echo "         terrain-class: as terrain, plus numpy" >&2
 fi
 
-# Both targets want ~100 GB, for different reasons: 28 GB of OSM source plus
+# The first two want ~100 GB, for different reasons: 28 GB of OSM source plus
 # planetiler's working files, or 44 GB of GeoTIFFs plus a 7 GB warped raster, a
-# 7.1 GB flat grid and 3.6 GB of tiles.
+# 7.1 GB flat grid and 3.6 GB of tiles. terrain-class wants ~25 GB more on top
+# of the terrain build it starts from.
+need_gb=100
+[ "$target" = "terrain-class" ] && need_gb=125
 free_gb=$(df -BG --output=avail . | tail -1 | tr -dc '0-9')
-if [ "${free_gb:-0}" -lt 100 ]; then
-    echo "error: ${free_gb} GB free, need ~100 GB for the ${target} build" >&2
+if [ "${free_gb:-0}" -lt "$need_gb" ]; then
+    echo "error: ${free_gb} GB free, need ~${need_gb} GB for the ${target} build" >&2
     exit 1
 fi
 
@@ -134,7 +143,7 @@ if [ "$target" = "basemap" ]; then
         --no-progress
 
     artefact="${PMTILES_NAME}"
-else
+elif [ "$target" = "terrain" ]; then
     echo "==> building the terrain tileset for ${TERRAIN_BBOX}"
     ./scripts/build-terrain.sh
 
@@ -147,6 +156,35 @@ else
     ./scripts/upload.sh
 
     artefact="${TERRAIN_DIR}/ ($(find "${DIST_DIR}/${TERRAIN_DIR}" -name '*.s16' | wc -l | tr -d ' ') tiles)"
+else
+    # The classes are computed from grid.raw, which only build-terrain.sh makes.
+    # On a fresh box that means the whole elevation build first — ~90 minutes,
+    # most of it the download — and then its staged tiles are removed before
+    # the upload. This target publishes the class tiles and nothing else: the
+    # live elevation grid is what SNOW-917 samples, and replacing it with a
+    # rebuild nobody asked for and nobody has verified is not a side effect a
+    # class build should have. (If swisstopo have published new squares since
+    # the live grid was built, the classes will describe the newer heights;
+    # verify.sh compares them against the live grid and will say so.)
+    if [ ! -s "${TERRAIN_WORK_DIR}/grid.raw" ]; then
+        echo "==> no ${TERRAIN_WORK_DIR}/grid.raw — building the elevation grid first"
+        ./scripts/build-terrain.sh
+    fi
+    # Unconditional: an earlier `terrain` run on this same box may have left
+    # its tiles staged, and upload.sh publishes whatever dist/ holds.
+    rm -rf "${DIST_DIR:?}/${TERRAIN_DIR:?}"
+
+    echo "==> building the terrain-class tileset"
+    ./scripts/build-terrain-class.sh
+
+    # The Worker has to know the /terrain-class/ route before these are of any
+    # use — until it is deployed they answer 404, since the bucket keys carry
+    # no version — but nothing breaks either way round, so the deploy and this
+    # upload can happen in either order. verify.sh needs both.
+    echo "==> uploading to R2"
+    ./scripts/upload.sh
+
+    artefact="${TERRAIN_CLASS_DIR}/ ($(find "${DIST_DIR}/${TERRAIN_CLASS_DIR}" -name '*.png' | wc -l | tr -d ' ') tiles)"
 fi
 
 cat <<EOF
