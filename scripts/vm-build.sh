@@ -169,8 +169,10 @@ else
     if [ ! -s "${TERRAIN_WORK_DIR}/grid.raw" ]; then
         echo "==> no ${TERRAIN_WORK_DIR}/grid.raw — building the elevation grid first"
         ./scripts/build-terrain.sh
-        rm -rf "${DIST_DIR:?}/${TERRAIN_DIR:?}"
     fi
+    # Unconditional: an earlier `terrain` run on this same box may have left
+    # its tiles staged, and upload.sh publishes whatever dist/ holds.
+    rm -rf "${DIST_DIR:?}/${TERRAIN_DIR:?}"
 
     echo "==> building the terrain-class tileset"
     ./scripts/build-terrain-class.sh
