@@ -192,6 +192,82 @@ def test_a_transparent_pixel_with_colour_becomes_nodata(tmp_path: Path) -> None:
     assert rows[0][3::4] == b"\xff" * 256
 
 
+def test_a_nodata_pixel_with_a_height_is_refused(tmp_path: Path) -> None:
+    # What the first live z14 warp left behind: a no-data class under a height.
+    extent = mercator_extent(*BBOX_T, ZOOM)
+    path = build_raster(tmp_path)
+    body = bytearray(path.read_bytes())
+    start = (DATA_TILE[1] * 256 * extent.width + DATA_TILE[0] * 256) * 4
+    body[start + 8 : start + 12] = bytes([8, 144, 255, 255])
+    path.write_bytes(bytes(body))
+
+    raster = MercatorRaster(path, extent)
+    try:
+        with pytest.raises(ValueError, match="carries a height"):
+            raster.tile(*DATA_TILE)
+    finally:
+        raster.close()
+
+
+def test_a_dropped_row_between_covered_rows_is_refused(tmp_path: Path) -> None:
+    extent = mercator_extent(*BBOX_T, ZOOM)
+    path = build_raster(tmp_path)
+    body = bytearray(path.read_bytes())
+    row = DATA_TILE[1] * 256 + 40
+    start = (row * extent.width + DATA_TILE[0] * 256) * 4
+    body[start : start + 256 * 4] = bytes([0, 0, 255, 0]) * 256
+    path.write_bytes(bytes(body))
+
+    raster = MercatorRaster(path, extent)
+    try:
+        with pytest.raises(ValueError, match="row 40 is wholly uncovered"):
+            raster.tile(*DATA_TILE)
+    finally:
+        raster.close()
+
+
+def test_a_dropped_row_on_a_tile_boundary_is_refused(tmp_path: Path) -> None:
+    # Row 0 of the data tile, with ground in the tile above it: a gap across
+    # the boundary, not the edge of coverage.
+    extent = mercator_extent(*BBOX_T, ZOOM)
+    path = build_raster(tmp_path)
+    body = bytearray(path.read_bytes())
+    above = DATA_TILE[1] * 256 - 1
+    start = (above * extent.width + DATA_TILE[0] * 256) * 4
+    body[start : start + 256 * 4] = bytes(encode_pixel(1500, 3)) * 256
+    row = DATA_TILE[1] * 256
+    start = (row * extent.width + DATA_TILE[0] * 256) * 4
+    body[start : start + 256 * 4] = bytes([0, 0, 255, 0]) * 256
+    path.write_bytes(bytes(body))
+
+    raster = MercatorRaster(path, extent)
+    try:
+        with pytest.raises(ValueError, match="row 0 is wholly uncovered"):
+            raster.tile(*DATA_TILE)
+    finally:
+        raster.close()
+
+
+def test_uncovered_rows_at_a_tile_edge_are_not_a_gap(tmp_path: Path) -> None:
+    # Coverage that starts part way down a tile is an edge, not a dropped row.
+    extent = mercator_extent(*BBOX_T, ZOOM)
+    path = build_raster(tmp_path)
+    body = bytearray(path.read_bytes())
+    for row in range(DATA_TILE[1] * 256, DATA_TILE[1] * 256 + 30):
+        start = (row * extent.width + DATA_TILE[0] * 256) * 4
+        body[start : start + 256 * 4] = bytes(256 * 4)
+    path.write_bytes(bytes(body))
+
+    raster = MercatorRaster(path, extent)
+    try:
+        rows = raster.tile(*DATA_TILE)
+    finally:
+        raster.close()
+
+    assert rows is not None
+    assert rows[0][:4] == bytes(NODATA_PIXEL)
+
+
 def test_a_raster_of_the_wrong_size_is_refused(tmp_path: Path) -> None:
     path = tmp_path / "short.raw"
     path.write_bytes(b"\0" * 16)

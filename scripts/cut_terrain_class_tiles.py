@@ -67,6 +67,8 @@ UNCOVERED = bytes(PIXEL_BYTES)
 NODATA_BYTES = bytes(NODATA_PIXEL)
 OPAQUE_ROW = bytes([ALPHA]) * TILE_PIXELS
 NODATA_ROW = bytes([NO_DATA]) * TILE_PIXELS
+TRANSPARENT_ROW = bytes(TILE_PIXELS)
+ZERO_ROW = bytes(TILE_PIXELS)
 
 #: zlib level. 6 is zlib's own default, and the knee of its curve: 9 is
 #: markedly slower for a percent or two on tiles this noisy in the low byte.
@@ -107,17 +109,47 @@ class MercatorRaster:
         """
         width = self.extent.width
         rows: list[bytes] = []
+        uncovered: list[bool] = []
         has_data = False
         for row in range(TILE_PIXELS):
             start = (index_y * TILE_PIXELS + row) * width + index_x * TILE_PIXELS
             start *= PIXEL_BYTES
-            line = self._map[start : start + ROW_BYTES].replace(UNCOVERED, NODATA_BYTES)
+            raw = self._map[start : start + ROW_BYTES]
+            uncovered.append(raw[3::PIXEL_BYTES] == TRANSPARENT_ROW)
+            line = raw.replace(UNCOVERED, NODATA_BYTES)
             if line[3::PIXEL_BYTES] != OPAQUE_ROW:
                 line = uncover(line, index_x, index_y, row)
+            check_nodata(line, index_x, index_y, row)
             if not has_data:
                 has_data = line[2::PIXEL_BYTES] != NODATA_ROW
             rows.append(line)
+        above: list[bool] = []
+        below: list[bool] = []
+        if not all(uncovered) and (uncovered[0] or uncovered[-1]):
+            # An empty run touching the tile's top or bottom edge may continue
+            # a gap that has ground on the far side of the boundary, so look up
+            # to one tile's height into the neighbouring raster rows.
+            top = index_y * TILE_PIXELS
+            if uncovered[0]:
+                above = [
+                    self._uncovered(raster_row, index_x)
+                    for raster_row in range(max(0, top - TILE_PIXELS), top)
+                ]
+            if uncovered[-1]:
+                bottom = top + TILE_PIXELS
+                below = [
+                    self._uncovered(raster_row, index_x)
+                    for raster_row in range(
+                        bottom, min(self.extent.height, bottom + TILE_PIXELS)
+                    )
+                ]
+        check_no_gap_rows(above + uncovered + below, index_x, index_y, len(above))
         return rows if has_data else None
+
+    def _uncovered(self, raster_row: int, index_x: int) -> bool:
+        """Return whether one raster row is wholly uncovered under a tile column."""
+        start = (raster_row * self.extent.width + index_x * TILE_PIXELS) * PIXEL_BYTES
+        return self._map[start + 3 : start + ROW_BYTES : PIXEL_BYTES] == TRANSPARENT_ROW
 
 
 def uncover(line: bytes, index_x: int, index_y: int, row: int) -> bytes:
@@ -146,6 +178,64 @@ def uncover(line: bytes, index_x: int, index_y: int, row: int) -> bytes:
         offset = index * PIXEL_BYTES
         pixels[offset : offset + PIXEL_BYTES] = NODATA_BYTES
     return bytes(pixels)
+
+
+def check_nodata(line: bytes, index_x: int, index_y: int, row: int) -> None:
+    """Refuse a no-data pixel that carries a height.
+
+    The contract's no-data pixel is R = G = 0, and the classifier writes
+    nothing else. A height under a no-data class means the bytes were not
+    written by the classifier at all: the first live z14 raster held them,
+    along with whole empty rows, and both went out to R2 before verify.sh
+    caught them. A margin row of pure no data is checked in one comparison.
+    """
+    classes = line[2::PIXEL_BYTES]
+    if NO_DATA not in classes:
+        return
+    if (
+        classes == NODATA_ROW
+        and line[0::PIXEL_BYTES] == ZERO_ROW
+        and line[1::PIXEL_BYTES] == ZERO_ROW
+    ):
+        return
+    index = classes.find(NO_DATA)
+    while index != -1:
+        offset = index * PIXEL_BYTES
+        if line[offset] or line[offset + 1]:
+            raise ValueError(
+                f"tile ({index_x}, {index_y}) row {row} pixel {index} is no data "
+                f"but carries a height ({line[offset]}, {line[offset + 1]}) — "
+                "the warped raster is corrupt; re-warp this zoom"
+            )
+        index = classes.find(NO_DATA, index + 1)
+
+
+def check_no_gap_rows(
+    uncovered: list[bool], index_x: int, index_y: int, first: int = 0
+) -> None:
+    """Refuse a tile with a wholly uncovered row between covered rows.
+
+    Coverage is the union of 1 km source squares, so its edge is never a
+    single horizontal line a tile wide with ground on both sides. A row left
+    empty between covered rows is a raster that was not wholly written, as
+    the first live z14 raster was across Switzerland, and would show as
+    no-data stripes on the map.
+
+    ``uncovered`` may carry raster rows from the tiles above and below, so a
+    gap that straddles a tile boundary is caught. The tile's own row 0 is
+    ``uncovered[first]``, and only the tile's own rows are reported.
+    """
+    covered = [index for index, empty in enumerate(uncovered) if not empty]
+    if not covered:
+        return
+    for index in range(
+        max(covered[0], first), min(covered[-1], first + TILE_PIXELS - 1) + 1
+    ):
+        if uncovered[index]:
+            raise ValueError(
+                f"tile ({index_x}, {index_y}) row {index - first} is wholly uncovered "
+                "between covered rows — the raster is incomplete; re-warp this zoom"
+            )
 
 
 def png(rows: list[bytes]) -> bytes:
