@@ -385,6 +385,33 @@ class MercatorExtent(NamedTuple):
         return self.tiles_y * TILE_PIXELS
 
 
+def mercator_strips(
+    extent: MercatorExtent, strip_tiles: int
+) -> list[tuple[float, float, int]]:
+    """Split an extent into horizontal strips of whole tile rows, north first.
+
+    Returns ``(south, north, height_px)`` per strip. Each strip is warped on its
+    own and the strips are concatenated: a BIP raster's rows are contiguous, so
+    the strips laid end to end are byte for byte the raster of the whole
+    extent. Edges are computed from the extent's own north and pixel size, so
+    neighbouring strips share an edge exactly and the last ends on ``south``.
+    """
+    if strip_tiles < 1:
+        raise ValueError(f"strip_tiles must be at least 1, not {strip_tiles}")
+    pixel = (extent.north - extent.south) / extent.height
+    strips = []
+    for first in range(0, extent.tiles_y, strip_tiles):
+        last = min(first + strip_tiles, extent.tiles_y)
+        top = first * TILE_PIXELS
+        bottom = last * TILE_PIXELS
+        north = extent.north - top * pixel
+        south = (
+            extent.south if last == extent.tiles_y else extent.north - bottom * pixel
+        )
+        strips.append((south, north, bottom - top))
+    return strips
+
+
 def world_pixel(lon: float, lat: float, zoom: int) -> tuple[float, float]:
     """Return the global pixel coordinate of a WGS84 point at a zoom."""
     size = TILE_PIXELS * 2**zoom
@@ -696,13 +723,26 @@ def _cmd_descriptor(args: argparse.Namespace) -> int:
     return 0
 
 
-def _cmd_mercator_extent(args: argparse.Namespace) -> int:
+def _extent_from_args(args: argparse.Namespace) -> MercatorExtent:
     if args.manifest:
         manifest = json.loads(Path(args.manifest).read_text(encoding="utf-8"))
         west, south, east, north = manifest["bbox"]
     else:
         west, south, east, north = args.bbox
-    extent = mercator_extent(west, south, east, north, args.zoom)
+    return mercator_extent(west, south, east, north, args.zoom)
+
+
+def _cmd_mercator_strips(args: argparse.Namespace) -> int:
+    # Full precision, as for mercator-extent: these become gdalwarp's -te.
+    for south, north, height in mercator_strips(
+        _extent_from_args(args), args.strip_tiles
+    ):
+        print(repr(south), repr(north), height)
+    return 0
+
+
+def _cmd_mercator_extent(args: argparse.Namespace) -> int:
+    extent = _extent_from_args(args)
     # Full precision: these become gdalwarp's -te, and a pixel grid that is off
     # by a rounding error is off by a fraction of a pixel everywhere.
     print(
@@ -801,6 +841,14 @@ def main(argv: list[str] | None = None) -> int:
     )
     p_ext.add_argument("--zoom", type=int, required=True)
     p_ext.set_defaults(func=_cmd_mercator_extent)
+
+    p_strip = sub.add_parser(
+        "mercator-strips", help="split a zoom's extent into strips of tile rows"
+    )
+    p_strip.add_argument("--manifest", required=True, help="fetch manifest")
+    p_strip.add_argument("--zoom", type=int, required=True)
+    p_strip.add_argument("--strip-tiles", type=int, required=True)
+    p_strip.set_defaults(func=_cmd_mercator_strips)
 
     p_pix = sub.add_parser("pixel", help="encode height, angle, aspect as RGBA")
     p_pix.add_argument("height", type=int, help="whole metres")

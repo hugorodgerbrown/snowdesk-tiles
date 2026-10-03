@@ -167,7 +167,11 @@ fi
 # Bump it for any change to the pixel contract or the kernel, not only to the
 # heights underneath: a pixel decoded under the wrong contract is a wrong slope
 # colour, not an error.
-: "${TERRAIN_CLASS_VERSION:=v1}"
+#
+# v2: the first live build published z14 tiles whose bands were out of step (the
+# one-call warp this branch replaced with strips); v1 URLs stay cached for a
+# year at the edge and in browsers.
+: "${TERRAIN_CLASS_VERSION:=v2}"
 
 # Subdirectory of DIST_DIR, and the bucket prefix.
 : "${TERRAIN_CLASS_DIR:=terrain-class}"

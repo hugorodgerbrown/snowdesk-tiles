@@ -55,6 +55,7 @@ from terrain_class import (  # noqa: E402
     locate,
     main,
     mercator_extent,
+    mercator_strips,
     octant_index,
     pixel_lonlat,
     read_pixel,
@@ -563,3 +564,25 @@ def test_check_tile_cli(
 
     assert main(["check-tile"]) == 0
     assert capsys.readouterr().out.strip() == "ok 0"
+
+
+@pytest.mark.parametrize("strip_tiles", [1, 3, 8, 1000])
+def test_strips_tile_the_extent_exactly(strip_tiles: int) -> None:
+    extent = mercator_extent(5.9503666, 45.7213375, 10.4998461, 47.8216742, 14)
+    strips = mercator_strips(extent, strip_tiles)
+
+    assert strips[0][1] == extent.north
+    assert strips[-1][0] == extent.south
+    assert sum(height for _, _, height in strips) == extent.height
+    for (south, _, _), (_, north, _) in zip(strips, strips[1:], strict=False):
+        assert south == north
+    pixel = (extent.north - extent.south) / extent.height
+    for south, north, height in strips:
+        assert height % 256 == 0
+        assert (north - south) / height == pytest.approx(pixel, rel=1e-12)
+
+
+def test_a_strip_needs_a_tile_row() -> None:
+    extent = mercator_extent(5.95, 45.72, 10.5, 47.82, 12)
+    with pytest.raises(ValueError, match="at least 1"):
+        mercator_strips(extent, 0)

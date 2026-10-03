@@ -154,28 +154,55 @@ for zoom in $zooms; do
     #
     # ENVI with INTERLEAVE=BIP is a flat RGBA array — exactly the byte layout of
     # a PNG row, so the cutter slices bytes with no decoder at all.
+    #
+    # Warped in strips of TERRAIN_CLASS_STRIP_TILES tile rows, then joined. The
+    # first live build warped z14 (53760x36608, 7.9 GB) in one call and the
+    # bands came out of step — class bytes beside the wrong heights, whole rows
+    # uncovered — while z12 and z13 (up to 2.0 GB) and a lone z14 tile warped
+    # with the same flags were right. A BIP raster's rows are contiguous, so
+    # strips laid end to end are the whole raster byte for byte; each strip's
+    # -te comes from terrain_class.py, sharing edges exactly with its
+    # neighbours. The default keeps a z14 strip near 440 MB.
     tmp="${work}/.warp-z${zoom}"
     rm -rf "$tmp"
     mkdir -p "$tmp"
-    gdalwarp \
-        -t_srs EPSG:3857 \
-        -te "$m_w" "$m_s" "$m_e" "$m_n" \
-        -ts "$width" "$height" \
-        -r near \
-        -et 0 \
-        -ot Byte \
-        -dstalpha \
-        -wo INIT_DEST=0 \
-        -multi -wo NUM_THREADS=ALL_CPUS -wm 1024 \
-        -of ENVI -co INTERLEAVE=BIP \
-        "$vrt" "${tmp}/${name}"
+    : >"${tmp}/${name}"
+    strip=0
+    while read -r s_s s_n s_height; do
+        strip=$((strip + 1))
+        part="${tmp}/strip-${strip}.raw"
+        gdalwarp -q \
+            -t_srs EPSG:3857 \
+            -te "$m_w" "$s_s" "$m_e" "$s_n" \
+            -ts "$width" "$s_height" \
+            -r near \
+            -et 0 \
+            -ot Byte \
+            -dstalpha \
+            -wo INIT_DEST=0 \
+            -multi -wo NUM_THREADS=ALL_CPUS -wm 1024 \
+            -of ENVI -co INTERLEAVE=BIP \
+            "$vrt" "$part"
 
-    hdr="${tmp}/${name%.raw}.hdr"
-    [ -f "$hdr" ] || hdr="${tmp}/${name}.hdr"
-    if [ -f "$hdr" ] && ! grep -qi '^interleave *= *bip' "$hdr"; then
-        echo "error: ${hdr} is not pixel-interleaved; the cutter assumes RGBA per pixel" >&2
-        exit 1
-    fi
+        hdr="${part%.raw}.hdr"
+        [ -f "$hdr" ] || hdr="${part}.hdr"
+        if [ -f "$hdr" ] && ! grep -qi '^interleave *= *bip' "$hdr"; then
+            echo "error: ${hdr} is not pixel-interleaved; the cutter assumes RGBA per pixel" >&2
+            exit 1
+        fi
+        expected=$((width * s_height * 4))
+        actual=$(wc -c <"$part" | tr -d ' ')
+        if [ "$actual" != "$expected" ]; then
+            echo "error: z${zoom} strip ${strip} is ${actual} bytes, expected ${expected}" >&2
+            exit 1
+        fi
+        cat "$part" >>"${tmp}/${name}"
+        rm -f "$part" "$hdr"
+        echo "    z${zoom}: strip ${strip} (${s_height} rows) warped"
+    done < <("$python" scripts/terrain_class.py mercator-strips \
+        --manifest "$manifest" --zoom "$zoom" \
+        --strip-tiles "${TERRAIN_CLASS_STRIP_TILES:-8}")
+
     # Moved into place only once whole, so a warp interrupted half way is
     # redone rather than mistaken for a finished raster on the next run.
     mv "${tmp}/${name}" "${work}/${name}"
