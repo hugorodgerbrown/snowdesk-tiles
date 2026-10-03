@@ -46,7 +46,8 @@ from terrain_grid import (  # noqa: E402
     tile_for,
 )
 
-WORKER_SOURCE = ROOT / "worker" / "src" / "index.js"
+# The terrain route lives in the tileset table index.js imports (SNOW-987).
+WORKER_SOURCE = ROOT / "worker" / "src" / "tilesets.js"
 
 # Generated with PROJ (pyproj, EPSG:4326 -> EPSG:3035) and pinned here so the
 # stdlib projection in terrain_grid.py cannot drift away from the real thing
