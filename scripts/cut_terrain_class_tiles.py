@@ -12,10 +12,11 @@ descriptor carrying the pixel contract from ``terrain_class.py``.
 no 3035 cell landed — outside the grid — and 255 everywhere else. The contract
 has no such thing as a transparent pixel (a canvas premultiplies, and these
 colours are data), so an uncovered pixel is rewritten to the no-data pixel,
-``(0, 0, 255, 255)``, and every pixel leaves with alpha 255. The rewrite is a
-single ``bytes.replace`` of four zero bytes per row: an uncovered pixel is all
-zeros, a covered one ends in 0xFF, so no run of four zeros can straddle a
-covered pixel and every match lands on a pixel boundary.
+``(0, 0, 255, 255)``, and every pixel leaves with alpha 255. An uncovered pixel
+is found by its alpha alone, never by its colour: ``INIT_DEST=0`` does not make
+it all zeros. On the z14 warp of the full grid gdalwarp left ``(0, 0, 255, 0)``
+along the edge, the margin's no-data class with no coverage, and a rewrite that
+looked for four zero bytes passed those through to fail the alpha check.
 
 **PNG written by hand, filter 0, zlib.** Pillow would be a binary dependency in
 a repo that has one optional one; a PNG is a signature, three chunks and a
@@ -63,9 +64,13 @@ from terrain_class import (
 
 PIXEL_BYTES = 4
 ROW_BYTES = TILE_PIXELS * PIXEL_BYTES
-UNCOVERED = bytes(PIXEL_BYTES)
 NODATA_BYTES = bytes(NODATA_PIXEL)
 OPAQUE_ROW = bytes([ALPHA]) * TILE_PIXELS
+UNCOVERED_ROW = bytes(TILE_PIXELS)
+NODATA_LINE = NODATA_BYTES * TILE_PIXELS
+#: The two alpha values a nearest-neighbour warp can write, removed with
+#: ``bytes.translate`` to find any third one.
+COVERAGE_ALPHAS = bytes([0, ALPHA])
 NODATA_ROW = bytes([NO_DATA]) * TILE_PIXELS
 
 #: zlib level. 6 is zlib's own default, and the knee of its curve: 9 is
@@ -111,19 +116,41 @@ class MercatorRaster:
         for row in range(TILE_PIXELS):
             start = (index_y * TILE_PIXELS + row) * width + index_x * TILE_PIXELS
             start *= PIXEL_BYTES
-            line = self._map[start : start + ROW_BYTES].replace(UNCOVERED, NODATA_BYTES)
-            if line[3::PIXEL_BYTES] != OPAQUE_ROW:
-                # Partial alpha means something other than a nearest-neighbour
-                # warp produced this raster, and the colour channels have been
-                # blended with it — they are no longer classes.
-                raise ValueError(
-                    f"tile ({index_x}, {index_y}) row {row} has an alpha other "
-                    "than 0 or 255 — was the warp not -r near?"
-                )
+            line = self._map[start : start + ROW_BYTES]
+            alpha = line[3::PIXEL_BYTES]
+            if alpha == UNCOVERED_ROW:
+                line = NODATA_LINE
+            elif alpha != OPAQUE_ROW:
+                if alpha.translate(None, COVERAGE_ALPHAS):
+                    # Partial alpha means something other than a
+                    # nearest-neighbour warp produced this raster, and the
+                    # colour channels have been blended with it — they are no
+                    # longer classes.
+                    raise ValueError(
+                        f"tile ({index_x}, {index_y}) row {row} has an alpha "
+                        "other than 0 or 255 — was the warp not -r near?"
+                    )
+                line = uncovered_to_nodata(line, alpha)
             if not has_data:
                 has_data = line[2::PIXEL_BYTES] != NODATA_ROW
             rows.append(line)
         return rows if has_data else None
+
+
+def uncovered_to_nodata(line: bytes, alpha: bytes) -> bytes:
+    """Rewrite every pixel of ``line`` whose alpha is 0 to the no-data pixel.
+
+    ``alpha`` is the row's alpha bytes, already read. Only rows on the edge of
+    the grid reach here — whole rows of either kind take the fast paths in
+    ``MercatorRaster.tile`` — so a loop over the zero alphas stays cheap.
+    """
+    out = bytearray(line)
+    pixel = alpha.find(0)
+    while pixel != -1:
+        offset = pixel * PIXEL_BYTES
+        out[offset : offset + PIXEL_BYTES] = NODATA_BYTES
+        pixel = alpha.find(0, pixel + 1)
+    return bytes(out)
 
 
 def png(rows: list[bytes]) -> bytes:

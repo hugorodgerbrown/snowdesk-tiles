@@ -152,6 +152,32 @@ def test_the_level_summary(cut_level: tuple[Path, dict[str, object]]) -> None:
     assert level["tile_y"] == [extent.tile_y + 1] * 2
 
 
+def test_an_uncovered_pixel_is_found_by_its_alpha_not_its_colour(
+    tmp_path: Path,
+) -> None:
+    # gdalwarp's z14 warp of the full grid left the margin's no-data class with
+    # no coverage, (0, 0, 255, 0), not the all-zero pixel INIT_DEST promises.
+    extent = mercator_extent(*BBOX_T, ZOOM)
+    path = build_raster(tmp_path)
+    body = bytearray(path.read_bytes())
+    row_bytes = extent.width * 4
+    first = (DATA_TILE[1] * 256 * extent.width + DATA_TILE[0] * 256) * 4
+    body[first : first + 4] = bytes((0, 0, 255, 0))
+    body[first + row_bytes + 8 : first + row_bytes + 12] = bytes((9, 9, 9, 0))
+    path.write_bytes(bytes(body))
+
+    raster = MercatorRaster(path, extent)
+    try:
+        rows = raster.tile(*DATA_TILE)
+    finally:
+        raster.close()
+    assert rows is not None
+    assert rows[0][0:4] == bytes(NODATA_PIXEL)
+    assert rows[1][8:12] == bytes(NODATA_PIXEL)
+    assert rows[1][4:8] == bytes(pixel_for(1, 1))
+    assert all(row[3::4] == bytes([255]) * 256 for row in rows)
+
+
 def test_partial_alpha_is_refused(tmp_path: Path) -> None:
     extent = mercator_extent(*BBOX_T, ZOOM)
     path = build_raster(tmp_path)
