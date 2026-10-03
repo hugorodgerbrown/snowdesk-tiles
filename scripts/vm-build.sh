@@ -47,8 +47,13 @@ esac
 : "${REPO_URL:=https://github.com/hugorodgerbrown/snowdesk-tiles.git}"
 : "${REPO_BRANCH:=main}"
 
-if [ -f scripts/config.sh ]; then
-    cd "$(dirname "$0")/.."
+# Look for config.sh beside this script, not in the working directory: the
+# README runs it as ./snowdesk-tiles/scripts/vm-build.sh from $HOME, where a
+# cwd-relative check missed the checkout and tried to clone over it. When the
+# script is piped to bash there is no checkout beside it, and it clones.
+script_dir=$(cd "$(dirname "$0")" && pwd)
+if [ -f "${script_dir}/config.sh" ]; then
+    cd "${script_dir}/.."
 else
     echo "==> cloning snowdesk-tiles (${REPO_BRANCH})"
     command -v git >/dev/null 2>&1 || { sudo apt-get update -qq && sudo apt-get install -y -qq git; }
