@@ -155,22 +155,31 @@ echo "==> terrain-class tiles"
 # Same shape as the elevation tiles: tens of thousands of small immutable
 # objects synced, and the descriptor copied last because it is the pointer the
 # browser reads the contract and the URL template from.
+#
+# Unlike the elevation tiles this sync passes --delete. The bucket keys carry no
+# version and the Worker strips it, so a tile a rebuild no longer produces would
+# otherwise go on being served as current classes rather than a 204. That makes
+# a partial staging dangerous — it would delete every level it lacks — so a
+# directory without tiles.json, which cut_terrain_class_tiles.py writes only for
+# a build of every zoom, is refused rather than published.
 if mirrored "$TERRAIN_CLASS_DIR"; then
+    if [ ! -f "${DIST_DIR}/${TERRAIN_CLASS_DIR}/tiles.json" ]; then
+        echo "error: ${DIST_DIR}/${TERRAIN_CLASS_DIR} has no tiles.json — a partial" >&2
+        echo "       build, or one that did not finish; not publishing it" >&2
+        exit 1
+    fi
+    # --exclude also keeps the live tiles.json out of the deletion.
     s3 sync "${DIST_DIR}/${TERRAIN_CLASS_DIR}" "s3://${R2_BUCKET}/${TERRAIN_CLASS_DIR}" \
+        --delete \
         --exclude 'tiles.json' \
         --content-type image/png \
         --cache-control "$IMMUTABLE_CACHE"
 
-    if [ -f "${DIST_DIR}/${TERRAIN_CLASS_DIR}/tiles.json" ]; then
-        echo "    descriptor (published last, after its tiles)"
-        s3 cp "${DIST_DIR}/${TERRAIN_CLASS_DIR}/tiles.json" \
-            "s3://${R2_BUCKET}/${TERRAIN_CLASS_DIR}/tiles.json" \
-            --content-type application/json \
-            --cache-control "$STYLE_CACHE"
-    else
-        echo "    warning: no tiles.json — it carries the pixel contract, so the" >&2
-        echo "             tiles cannot be decoded safely without one" >&2
-    fi
+    echo "    descriptor (published last, after its tiles)"
+    s3 cp "${DIST_DIR}/${TERRAIN_CLASS_DIR}/tiles.json" \
+        "s3://${R2_BUCKET}/${TERRAIN_CLASS_DIR}/tiles.json" \
+        --content-type application/json \
+        --cache-control "$STYLE_CACHE"
 fi
 
 echo "==> style (published last)"

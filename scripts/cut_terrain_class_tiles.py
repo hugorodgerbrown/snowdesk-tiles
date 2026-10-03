@@ -41,6 +41,7 @@ from __future__ import annotations
 import argparse
 import json
 import mmap
+import shutil
 import struct
 import sys
 import zlib
@@ -245,6 +246,10 @@ def main(argv: list[str] | None = None) -> int:
         # grid being sliced is the one that was warped.
         extent = mercator_extent(west, south, east, north, zoom)
         raster = MercatorRaster(Path(args.work) / raster_name(zoom), extent)
+        # A rebuild into the same directory must not keep a tile this build
+        # found empty: tiles.json would omit it, upload.sh would still publish
+        # it, and the Worker would serve the old classes instead of a 204.
+        shutil.rmtree(out / str(zoom), ignore_errors=True)
         try:
             print(
                 f"==> z{zoom}: cutting {extent.tiles_x}x{extent.tiles_y} tiles",
@@ -260,7 +265,21 @@ def main(argv: list[str] | None = None) -> int:
         levels.append(level)
 
     document = tiles_json(levels, bbox, args.origin, args.version)
-    (out / "tiles.json").write_text(json.dumps(document, indent=2) + "\n", "utf-8")
+    # The descriptor promises z{MIN_ZOOM}-{MAX_ZOOM}, and so does the Worker,
+    # so only a build of every level may carry one. A narrowed build (a quick
+    # look at one zoom) still writes its tiles, but no tiles.json — and
+    # upload.sh refuses a class directory without one, because it syncs with
+    # --delete and would otherwise remove the levels this build skipped.
+    descriptor_path = out / "tiles.json"
+    if sorted(args.zooms) == list(range(MIN_ZOOM, MAX_ZOOM + 1)):
+        descriptor_path.write_text(json.dumps(document, indent=2) + "\n", "utf-8")
+    else:
+        descriptor_path.unlink(missing_ok=True)
+        print(
+            f"==> partial build (z{sorted(args.zooms)}): no tiles.json written, "
+            "so upload.sh will not publish it",
+            file=sys.stderr,
+        )
     print(
         f"==> {document['tile_count']} tiles, {document['bytes']:,} bytes "
         f"({document['bytes'] / 1e9:.2f} GB, the unit R2 bills in)",

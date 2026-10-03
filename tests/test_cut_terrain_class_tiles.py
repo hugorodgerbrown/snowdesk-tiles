@@ -195,26 +195,51 @@ def test_png_is_rgba_with_filter_zero() -> None:
     assert read_png_rgba(body) == (3, 2, [bytes(NODATA_PIXEL) * 3] * 2)
 
 
-def test_main_writes_tiles_and_the_descriptor(tmp_path: Path) -> None:
+def run_main(tmp_path: Path, zooms: list[int]) -> Path:
+    """Build rasters for ``zooms``, run the cutter over them, return its out dir."""
     work = tmp_path / "work"
-    build_raster(work, 12)
-    build_raster(work, 13)
+    for zoom in zooms:
+        build_raster(work, zoom)
     manifest = tmp_path / "manifest.json"
     manifest.write_text(json.dumps({"bbox": BBOX}))
     out = tmp_path / "terrain-class"
 
     args = ["--work", str(work), "--manifest", str(manifest), "--out", str(out)]
-    args += ["--origin", "https://o.test", "--version", "v1", "--zooms", "12", "13"]
-    assert main(args) == 0
+    args += ["--origin", "https://o.test", "--version", "v1", "--zooms"]
+    assert main(args + [str(zoom) for zoom in zooms]) == 0
+    return out
+
+
+def test_main_writes_tiles_and_the_descriptor(tmp_path: Path) -> None:
+    out = run_main(tmp_path, [12, 13, 14])
 
     doc = json.loads((out / "tiles.json").read_text())
     pngs = sorted(out.rglob("*.png"))
     assert doc["tiles"] == ["https://o.test/terrain-class/v1/{z}/{x}/{y}.png"]
     assert doc["bounds"] == BBOX
-    assert doc["tile_count"] == len(pngs) == 2
+    assert doc["tile_count"] == len(pngs) == 3
     assert doc["bytes"] == sum(path.stat().st_size for path in pngs)
-    assert [level["zoom"] for level in doc["levels"]] == [12, 13]
+    assert [level["zoom"] for level in doc["levels"]] == [12, 13, 14]
     assert doc["encoding"]["nodata"] == 255
+
+
+def test_a_partial_build_writes_no_descriptor(tmp_path: Path) -> None:
+    out = run_main(tmp_path, [12, 13, 14])
+    out = run_main(tmp_path, [14])
+
+    assert not (out / "tiles.json").exists()
+    assert sorted(out.rglob("*.png"))
+
+
+def test_a_rebuild_drops_a_tile_that_became_empty(tmp_path: Path) -> None:
+    out = run_main(tmp_path, [12, 13, 14])
+    stale = out / "12" / "999999" / "0.png"
+    stale.parent.mkdir(parents=True)
+    stale.write_bytes(b"old")
+
+    run_main(tmp_path, [12, 13, 14])
+
+    assert not stale.exists()
 
 
 def test_main_refuses_a_zoom_the_worker_will_not_serve(tmp_path: Path) -> None:
