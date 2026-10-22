@@ -103,8 +103,16 @@ fi
 
 echo "==> natural earth raster tiles"
 if mirrored natural_earth; then
+    # Two passes because --content-type applies to the whole sync. The PNGs
+    # stay published beside their WebP twins: the style that names them has a
+    # one-hour TTL, and offline areas pinned before the switch hold PNG URLs.
     s3 sync "${DIST_DIR}/natural_earth" "s3://${R2_BUCKET}/natural_earth" \
+        --exclude '*' --include '*.png' \
         --content-type image/png \
+        --cache-control "$IMMUTABLE_CACHE"
+    s3 sync "${DIST_DIR}/natural_earth" "s3://${R2_BUCKET}/natural_earth" \
+        --exclude '*' --include '*.webp' \
+        --content-type image/webp \
         --cache-control "$IMMUTABLE_CACHE"
 fi
 

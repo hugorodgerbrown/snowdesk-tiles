@@ -60,6 +60,8 @@ check "glyphs respond" 200 \
 # 404s the background when zoomed out.
 check "natural earth raster responds" 200 \
     "$(status "${TILES_ORIGIN}/natural_earth/ne2sr/0/0/0.png")"
+check "natural earth webp responds" 200 \
+    "$(status "${TILES_ORIGIN}/natural_earth/ne2sr/0/0/0.webp")"
 
 # Vector tiles come from the Worker, not the bucket. Until it is deployed the
 # style resolves and every other asset loads while the map renders empty, so
@@ -393,6 +395,8 @@ check "archive is binary" "application/octet-stream" \
     "$(content_type "${TILES_ORIGIN}/${PMTILES_NAME}")"
 check "raster is png" "image/png" \
     "$(content_type "${TILES_ORIGIN}/natural_earth/ne2sr/0/0/0.png")"
+check "raster twin is webp" "image/webp" \
+    "$(content_type "${TILES_ORIGIN}/natural_earth/ne2sr/0/0/0.webp")"
 
 # CORS is what actually breaks in production: a working origin the browser
 # refuses to read cross-origin looks identical to an outage from the app side.
