@@ -73,6 +73,12 @@ DEFAULT_ATTRIBUTION = (
 # serving our origin with no attribution at all is what SNOW-640 was about.
 RASTER_ATTRIBUTION = '<a href="https://www.naturalearthdata.com/">Natural Earth</a>'
 
+# The relief raster is mirrored as upstream's PNGs and transcoded to a WebP twin
+# beside each one (``transcode_raster.py``). The style names the twins: a z6
+# relief tile drops from 190-325 KB to 20-25 KB, and the first view of the
+# Snowdesk map loads three of them. ``png`` puts the upstream format back.
+DEFAULT_RASTER_EXT = "webp"
+
 
 def load_style(source: str) -> dict[str, Any]:
     """Return the style JSON, fetched over HTTP or read from a local path."""
@@ -96,6 +102,7 @@ def rewrite(
     min_zoom: int = DEFAULT_MIN_ZOOM,
     max_zoom: int = DEFAULT_MAX_ZOOM,
     attribution: str = DEFAULT_ATTRIBUTION,
+    raster_ext: str = DEFAULT_RASTER_EXT,
 ) -> dict[str, Any]:
     """Repoint every upstream URL at ``origin`` and tiles at ``tile_path``.
 
@@ -127,6 +134,11 @@ def rewrite(
     source the section renders as a bare heading and the required OpenStreetMap
     and OpenMapTiles credits are simply absent (SNOW-640). Every source is left
     carrying one — a source that already declares its own keeps it.
+
+    Raster tiles served from ``origin`` as ``.png`` are renamed to
+    ``raster_ext`` — the WebP twins ``transcode_raster.py`` writes. A raster
+    template on any other host is left alone: we only publish twins for what we
+    mirror.
 
     Raises if no vector source is found — that would mean the upstream style
     shape changed and the rewrite is no longer safe to trust.
@@ -166,8 +178,16 @@ def rewrite(
     # Anything else we serve — the Natural Earth raster — gets a credit too, but
     # only where the style does not already carry one of its own.
     for spec in rewritten.get("sources", {}).values():
-        if spec.get("type") == "raster" and not spec.get("attribution"):
+        if spec.get("type") != "raster":
+            continue
+        if not spec.get("attribution"):
             spec["attribution"] = RASTER_ATTRIBUTION
+        spec["tiles"] = [
+            f"{tile.removesuffix('.png')}.{raster_ext}"
+            if tile.startswith(f"{origin}/") and tile.endswith(".png")
+            else tile
+            for tile in spec.get("tiles", [])
+        ]
 
     return rewritten
 
@@ -210,6 +230,15 @@ def main(argv: list[str] | None = None) -> int:
         default=DEFAULT_ATTRIBUTION,
         help="credit written onto the vector source (default: OpenMapTiles + OSM)",
     )
+    parser.add_argument(
+        "--raster-ext",
+        default=DEFAULT_RASTER_EXT,
+        choices=["webp", "png"],
+        help=(
+            "extension the relief raster is served as "
+            f"(default: {DEFAULT_RASTER_EXT}; png reverts to upstream's tiles)"
+        ),
+    )
     args = parser.parse_args(argv)
 
     style = load_style(args.source)
@@ -220,6 +249,7 @@ def main(argv: list[str] | None = None) -> int:
         args.min_zoom,
         args.max_zoom,
         args.attribution,
+        args.raster_ext,
     )
     json.dump(rewritten, sys.stdout, indent=2)
     sys.stdout.write("\n")
