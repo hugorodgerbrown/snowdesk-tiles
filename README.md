@@ -27,8 +27,9 @@ entry) lives in `snowdesk-data-pipeline` under SNOW-242.
 | `scripts/config.sh` | Every tunable, as an env var with a default. Sourced by the rest. |
 | `scripts/build-extract.sh` | planetiler → `dist/snowdesk.pmtiles`. Slow; needs ~100 GB disk. |
 | `scripts/mirror_assets.py` | Mirrors sprites, glyphs and the Natural Earth raster from upstream. |
+| `scripts/transcode_raster.py` | Writes a WebP twin beside each mirrored relief PNG. Needs Pillow. |
 | `scripts/rewrite_style.py` | Repoints the Liberty style JSON at our origin and archive. |
-| `scripts/build.sh` | Runs the two above to assemble `dist/`. |
+| `scripts/build.sh` | Runs the three above to assemble `dist/`. |
 | `scripts/upload.sh` | Publishes `dist/` to R2 with per-class Content-Type and Cache-Control. |
 | `scripts/setup-bucket.sh` | One-time bucket creation. |
 | `scripts/vm-build.sh` | Builds the archive on a throwaway VM and uploads it to R2. |
@@ -274,6 +275,13 @@ that the only thing the style rewrite has to change is the hostname:
   ~310 MB, and it is the slow part of the mirror by request count. Skip it with
   `python scripts/mirror_assets.py --skip-raster` while iterating, but ship it:
   without it the basemap 404s when zoomed out.
+  `transcode_raster.py` then writes a lossy WebP (quality 80) beside every
+  PNG, and the style names the WebP. Upstream's tiles are 512 px RGB PNGs of
+  190-325 KB each over the Alps, and the Snowdesk map's first view loads
+  three: about 700 KB, 40% of the mobile page. As WebP they are 20-25 KB each.
+  The PNGs are still uploaded, because the style has a one-hour TTL and
+  offline areas pinned before the switch hold PNG URLs.
+  `rewrite_style.py --raster-ext png` reverts the style to them.
 - **The style itself**, rewritten by `rewrite_style.py` to point every sprite,
   glyph, raster and vector URL at `TILES_ORIGIN`, with the vector source given
   an XYZ `tiles` array pointing at `$TILES_ORIGIN/$TILE_PATH` and the archive's
@@ -307,7 +315,7 @@ dist/
 ├── styles/liberty
 ├── sprites/ofm_f384/ofm{,@2x}.{json,png}
 ├── fonts/{fontstack}/{range}.pbf
-├── natural_earth/ne2sr/{z}/{x}/{y}.png
+├── natural_earth/ne2sr/{z}/{x}/{y}.{png,webp}
 └── snowdesk.pmtiles
 ```
 

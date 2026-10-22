@@ -6,9 +6,10 @@ requires-python = ">=3.12"
 dependencies = []
 
 [project.optional-dependencies]
-# Only classify_terrain.py needs it (SNOW-987): a slope kernel over three
-# billion cells is not a job for a Python loop. Everything else stays stdlib.
-build = ["numpy"]
+# numpy for classify_terrain.py (SNOW-987): a slope kernel over three billion
+# cells is not a job for a Python loop. Pillow for transcode_raster.py, which
+# encodes the relief tiles' WebP twins. Everything else stays stdlib.
+build = ["numpy", "pillow"]
 
 [tool.ruff]
 line-length = 88

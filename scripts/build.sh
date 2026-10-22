@@ -30,8 +30,24 @@ EOF
     exit 1
 fi
 
+# Pillow encodes the relief tiles' WebP twins (transcode_raster.py), the one
+# thing in this script that is not stdlib. Checked before the mirror for the
+# same reason as the interpreter: don't find out after the download.
+if ! "$python" -c 'import PIL' 2>/dev/null; then
+    cat >&2 <<EOF
+error: ${python} cannot import Pillow, which encodes the relief WebP tiles
+
+    pip install pillow                     # or: uv pip install pillow
+    sudo apt-get install -y python3-pil    # Debian/Ubuntu
+EOF
+    exit 1
+fi
+
 echo "==> mirroring sprites and glyphs from ${UPSTREAM_ORIGIN}"
 "$python" scripts/mirror_assets.py --dist "$DIST_DIR"
+
+echo "==> encoding WebP twins of the relief raster"
+"$python" scripts/transcode_raster.py --dist "$DIST_DIR"
 
 echo "==> rewriting style for ${TILES_ORIGIN} (${PMTILES_NAME})"
 mkdir -p "${DIST_DIR}/styles"

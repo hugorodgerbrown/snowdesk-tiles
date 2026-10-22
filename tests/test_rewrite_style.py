@@ -159,3 +159,33 @@ def test_missing_vector_source_is_an_error() -> None:
 
     with pytest.raises(ValueError, match="no vector source"):
         rewrite(without_vector, ORIGIN, TILE_PATH)
+
+
+def test_mirrored_raster_is_served_as_webp() -> None:
+    # transcode_raster.py writes a WebP twin beside every mirrored PNG; the
+    # style names the twins, which are about a tenth of the size.
+    result = rewrite(style(), ORIGIN, TILE_PATH)
+
+    assert result["sources"]["natural_earth_shaded_relief"]["tiles"] == [
+        f"{ORIGIN}/natural_earth/ne2sr/{{z}}/{{x}}/{{y}}.webp"
+    ]
+
+
+def test_raster_ext_png_keeps_upstream_tiles() -> None:
+    result = rewrite(style(), ORIGIN, TILE_PATH, raster_ext="png")
+
+    assert result["sources"]["natural_earth_shaded_relief"]["tiles"] == [
+        f"{ORIGIN}/natural_earth/ne2sr/{{z}}/{{x}}/{{y}}.png"
+    ]
+
+
+def test_raster_on_another_host_is_not_renamed() -> None:
+    # Only what we mirror has a twin. A raster served from elsewhere keeps
+    # whatever URL it came with.
+    upstream = style()
+    elsewhere = "https://example.org/relief/{z}/{x}/{y}.png"
+    upstream["sources"]["natural_earth_shaded_relief"]["tiles"] = [elsewhere]
+
+    result = rewrite(upstream, ORIGIN, TILE_PATH)
+
+    assert result["sources"]["natural_earth_shaded_relief"]["tiles"] == [elsewhere]
