@@ -185,13 +185,19 @@ with 160 GB and 16 GB RAM will do.
    Location Falkenstein or Nuremberg, image **Ubuntu 24.04**, type **CX42**,
    and add your SSH key. Everything else default. It boots in under a minute.
 
-2. **Get the R2 credentials to hand.** You need three values, all already in
-   1Password:
+2. **Get a credential to hand.** Either a 1Password **service account token**
+   (one value; the VM resolves the rest itself), or the three R2 values:
 
    ```bash
    op item get "CloudFlare R2 - Snowdesk" --format json \
-       | jq -r '.fields[] | select(.label|test("Account ID|S3 Access Key ID|S3 Secret Access Key")) | "\(.label): \(.value)"'
+       | jq -r '.fields[] | select(.label|test("Account ID|Access Key ID|Secret Access Key")) | "\(.label): \(.value)"'
    ```
+
+   A service account cannot read a Private vault. Grant it read access to a
+   vault holding the R2 item, and if that is not the vault `.env.1password`
+   names, copy the file with the vault changed and pass it as `OP_ENV_FILE`.
+   Create a service account at 1Password → Developer → Service Accounts; a
+   read-only one scoped to that vault is enough.
 
 3. **SSH in and run the build:**
 
@@ -201,8 +207,10 @@ with 160 GB and 16 GB RAM will do.
    ./snowdesk-tiles/scripts/vm-build.sh
    ```
 
-   It prompts for the three values — paste each one; they are not echoed and do
-   not reach shell history. Then it installs Java and the AWS CLI, checks disk,
+   It asks for the service account token first: paste it and it installs the
+   1Password CLI and resolves the R2 values from `.env.1password`. Press Enter
+   instead and it asks for the three values. Nothing is echoed or reaches shell
+   history. Then it installs Java and the AWS CLI, checks disk,
    sizes planetiler's heap to the box, builds, and uploads to R2. Expect one to
    two hours; run it under `tmux` if your connection is unreliable.
 
@@ -331,7 +339,7 @@ dist/
 ## Step 3 — Provision the bucket (once)
 
 ```bash
-op run --env-file=.env.1password -- ./scripts/setup-bucket.sh
+./scripts/setup-bucket.sh
 ```
 
 Creates the bucket and prints the one remaining manual step — adding a Cache
@@ -389,15 +397,22 @@ the CSP derives a single origin from `OPENFREEMAP_STYLE_URL`.
 ## Step 4 — Publish
 
 ```bash
-op run --env-file=.env.1password -- ./scripts/upload.sh
+./scripts/upload.sh
 ```
 
-Credentials come from an R2 API token. `.env.1password` holds 1Password
-*references*, not values — `op run` resolves them at launch and injects them
-into the child process only, so nothing is written to disk and no secret lands
-in shell history. Adjust the vault and item names in that file to match your
-setup. Any other mechanism works too, as long as the three variables are in the
-environment:
+Credentials come from an R2 API token, kept in 1Password. `.env.1password`
+holds 1Password *references*, not values. When a credential is missing from the
+environment and the [1Password CLI](https://developer.1password.com/docs/cli/)
+(`op`) is installed, `upload.sh` and `setup-bucket.sh` re-run themselves under
+`op run --env-file=.env.1password` (`scripts/op-env.sh`). op resolves the
+references at launch and hands the values to that one process, so nothing is
+written to disk and no secret lands in shell history. On a laptop the desktop
+app's CLI integration unlocks it — a Touch ID prompt, no `op signin`. Adjust the
+vault and item names in that file to match your setup.
+
+`OP_ENV_FILE=<path>` names another references file, and `USE_1PASSWORD=0`
+turns the lookup off. Values already in the environment always win, so any
+other mechanism works too:
 
 ```bash
 CLOUDFLARE_ACCOUNT_ID=... AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=... \
@@ -425,7 +440,7 @@ with checksums off:
 
 ```bash
 AWS_REQUEST_CHECKSUM_CALCULATION=when_required \
-    op run --env-file=.env.1password -- ./scripts/upload.sh
+    ./scripts/upload.sh
 ```
 
 `sync` skips what already transferred, so a retry resumes rather than restarts.
@@ -716,7 +731,7 @@ published.
 ### Publish and verify
 
 ```bash
-op run --env-file=.env.1password -- ./scripts/upload.sh
+./scripts/upload.sh
 ./scripts/verify.sh
 ```
 
@@ -798,7 +813,7 @@ Three decisions that are not visible in the output:
 ./scripts/build-terrain.sh          # if work/terrain/grid.raw is not already there
 ./scripts/build-terrain-class.sh
 (cd worker && npx wrangler deploy)  # once: the /terrain-class/ route
-op run --env-file=.env.1password -- ./scripts/upload.sh
+./scripts/upload.sh
 ./scripts/verify.sh
 ```
 
@@ -897,7 +912,7 @@ Or by hand, with the pmtiles CLI on `PATH`:
 
 ```bash
 ./scripts/build-dem.sh 2026-11                              # → dist/dem/2026-11/
-op run --env-file=.env.1password -- ./scripts/upload.sh     # publishes every dist/dem/*/
+./scripts/upload.sh                                         # publishes every dist/dem/*/
 cd worker && npx wrangler deploy && cd ..                   # once, for the /dem/ route
 DEM_VERSION=2026-11 ./scripts/verify.sh
 ```
