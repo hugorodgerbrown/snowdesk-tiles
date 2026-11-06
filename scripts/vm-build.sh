@@ -5,6 +5,7 @@
 #     ./snowdesk-tiles/scripts/vm-build.sh            # the vector tile archive
 #     ./snowdesk-tiles/scripts/vm-build.sh terrain    # the elevation tileset
 #     ./snowdesk-tiles/scripts/vm-build.sh terrain-class   # the class tiles
+#     ./snowdesk-tiles/scripts/vm-build.sh dem 2026-11     # the 3-D elevation copy
 #
 # Run this ON the VM, not on your laptop. The point is that the tens of GB of
 # source, the working files and the finished output never touch your machine —
@@ -37,8 +38,13 @@ set -euo pipefail
 target=${1:-basemap}
 case $target in
     basemap | terrain | terrain-class) ;;
+    dem)
+        # The version names the copy in its URL; build-dem.sh insists on one.
+        dem_version=${2:-}
+        [ -n "$dem_version" ] || { echo "usage: $0 dem <version>   e.g. 2026-11" >&2; exit 2; }
+        ;;
     *)
-        echo "usage: $0 [basemap|terrain|terrain-class]" >&2
+        echo "usage: $0 [basemap|terrain|terrain-class|dem <version>]" >&2
         exit 2
         ;;
 esac
@@ -98,6 +104,34 @@ install_aws_cli() {
     rm -rf "$tmp"
 }
 
+# The pmtiles CLI, for the elevation copy (SNOW-1444). Not in apt; a single Go
+# binary from protomaps' releases. PMTILES_CLI_VERSION pins one; unset, the
+# latest release is used, read from the redirect GitHub gives /releases/latest.
+install_pmtiles_cli() {
+    if command -v pmtiles >/dev/null 2>&1; then
+        echo "    pmtiles already installed ($(pmtiles version 2>&1 | head -1))"
+        return
+    fi
+    local version=${PMTILES_CLI_VERSION:-} arch tmp
+    if [ -z "$version" ]; then
+        version=$(curl -fsSI https://github.com/protomaps/go-pmtiles/releases/latest \
+            | tr -d '\r' | sed -n 's|^location: .*/tag/v||Ip')
+    fi
+    [ -n "$version" ] || { echo "error: could not resolve a pmtiles release" >&2; exit 1; }
+    case $(uname -m) in
+        x86_64) arch=x86_64 ;;
+        aarch64 | arm64) arch=arm64 ;;
+        *) echo "error: no pmtiles build for $(uname -m)" >&2; exit 1 ;;
+    esac
+    tmp=$(mktemp -d)
+    curl -fsSL "https://github.com/protomaps/go-pmtiles/releases/download/v${version}/go-pmtiles_${version}_Linux_${arch}.tar.gz" \
+        -o "${tmp}/pmtiles.tar.gz"
+    tar -xzf "${tmp}/pmtiles.tar.gz" -C "$tmp" pmtiles
+    sudo install -m 0755 "${tmp}/pmtiles" /usr/local/bin/pmtiles
+    rm -rf "$tmp"
+    echo "    pmtiles ${version} installed"
+}
+
 echo "==> installing build dependencies for ${target}"
 if command -v apt-get >/dev/null 2>&1; then
     export DEBIAN_FRONTEND=noninteractive
@@ -108,12 +142,15 @@ if command -v apt-get >/dev/null 2>&1; then
         terrain) sudo apt-get install -y -qq gdal-bin python3 curl unzip ;;
         # numpy for the classifier, the one script in the repo that needs it.
         terrain-class) sudo apt-get install -y -qq gdal-bin python3 python3-numpy curl unzip ;;
+        dem) sudo apt-get install -y -qq python3 curl unzip ;;
     esac
     install_aws_cli
+    [ "$target" = "dem" ] && install_pmtiles_cli
 else
     echo "warning: not a Debian/Ubuntu host — install the dependencies yourself" >&2
     echo "         basemap: Java 21 + awscli v2; terrain: GDAL + Python 3.12 + awscli v2" >&2
-    echo "         terrain-class: as terrain, plus numpy" >&2
+    echo "         terrain-class: as terrain, plus numpy"
+    echo "         dem: Python 3.12 + the pmtiles CLI + awscli v2" >&2
 fi
 
 # The first two want ~100 GB, for different reasons: 28 GB of OSM source plus
@@ -122,6 +159,10 @@ fi
 # of the terrain build it starts from.
 need_gb=100
 [ "$target" = "terrain-class" ] && need_gb=125
+# The elevation copy is an estimate until the first build reports it: z13-15 is
+# about 1.5% of a z18 regional archive's bytes and 6% of a z17 one's, which over
+# the seven Alpine and Pyrenean archives comes to roughly 20-40 GB.
+[ "$target" = "dem" ] && need_gb=80
 free_gb=$(df -BG --output=avail . | tail -1 | tr -dc '0-9')
 if [ "${free_gb:-0}" -lt "$need_gb" ]; then
     echo "error: ${free_gb} GB free, need ~${need_gb} GB for the ${target} build" >&2
@@ -161,6 +202,16 @@ elif [ "$target" = "terrain" ]; then
     ./scripts/upload.sh
 
     artefact="${TERRAIN_DIR}/ ($(find "${DIST_DIR}/${TERRAIN_DIR}" -name '*.s16' | wc -l | tr -d ' ') tiles)"
+elif [ "$target" = "dem" ]; then
+    echo "==> building the 3-D elevation copy ${dem_version}"
+    ./scripts/build-dem.sh "$dem_version"
+
+    # upload.sh publishes only what is staged — here dist/dem/ — and never
+    # replaces a version that is already in the bucket.
+    echo "==> uploading to R2"
+    ./scripts/upload.sh
+
+    artefact="${DEM_DIR}/${dem_version}/ ($(du -sh "${DIST_DIR}/${DEM_DIR}/${dem_version}" | cut -f1))"
 else
     # The classes are computed from grid.raw, which only build-terrain.sh makes.
     # On a fresh box that means the whole elevation build first — ~90 minutes,
@@ -198,7 +249,7 @@ cat <<EOF
 
 Back on your laptop:
 
-    ./scripts/verify.sh
+    ./scripts/verify.sh          # DEM_VERSION=<version> for the elevation copy
 
 Then destroy this VM — the R2 credentials are in its environment.
 EOF
