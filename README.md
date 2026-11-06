@@ -166,14 +166,22 @@ is 101 GB of MBTiles, needing the same class of machine to convert anyway.
 constraint — the source, planetiler's working files and the output have to
 coexist.
 
-**Recommended: Hetzner Cloud CX42** — 8 vCPU, 16 GB RAM, 160 GB NVMe, €0.0273
-per hour. Falkenstein or Nuremberg, because Geofabrik is hosted in Germany and
-the 28 GB source then downloads at line speed. CX52 (16 vCPU, 32 GB, 320 GB,
-€0.054/hour) if you want it finished sooner or CX42 has no capacity.
+**Recommended: a Hetzner Cloud shared-vCPU server with at least that** — at
+the time of writing the **CX43** (8 vCPU, 16 GB RAM, 160 GB), or the AMD
+**CPX** plan of the same size where the CX line cannot be ordered. Hetzner
+renames and retires plans (the CX42 this section first named is no longer
+sold), so pick by the specs rather than the name. Falkenstein or Nuremberg,
+because Geofabrik is hosted in Germany and the 28 GB source then downloads at
+line speed. A plan twice that size is worth it if you want the build finished
+sooner.
 
-Note the **hourly** rate. Hetzner advertises monthly prices — €16.40 for CX42,
-€32.40 for CX52 — but bills by the hour, so a two-hour build costs about six
-cents, not forty euros. Destroy the server when it finishes and that is all you
+The 3-D elevation copy (`vm-build.sh dem`) needs less: ~80 GB free disk, and
+CPU and RAM barely matter. A smaller plan with a 100 GB Volume attached, and
+the build run from the Volume, will do.
+
+Note the **hourly** rate. Hetzner advertises monthly prices (about €16 for the
+8 vCPU plan in 2026) but bills by the hour, so a two-hour build costs a few
+cents, not a month. Destroy the server when it finishes and that is all you
 pay.
 
 Other providers work; they cost several times more for the same disk. Anything
@@ -182,7 +190,8 @@ with 160 GB and 16 GB RAM will do.
 #### From scratch
 
 1. **Create the server.** console.hetzner.cloud → New Project → Add Server.
-   Location Falkenstein or Nuremberg, image **Ubuntu 24.04**, type **CX42**,
+   Location Falkenstein or Nuremberg, image **Ubuntu 24.04**, type **CX43**
+   (or any plan with the specs above),
    and add your SSH key. Everything else default. It boots in under a minute.
 
 2. **Get a credential to hand.** Either a 1Password **service account token**
@@ -683,7 +692,7 @@ run resumes:
    tiles below do need numpy, for their one compute step.)
 
 Budget ~100 GB of disk and about **90 minutes**. Measured on 2026-09-13 on a
-CX42 (8 vCPU): roughly 20 minutes to page the catalogue, 20 to download at eight
+An 8 vCPU box: roughly 20 minutes to page the catalogue, 20 to download at eight
 parallel curls, and the warp the longest single stage; the quantise and the cut
 are fast by comparison. Peak disk was 56 GB in `work/terrain` alongside 3.6 GB
 of tiles. Same advice as the basemap: rent a box rather than clearing that much
