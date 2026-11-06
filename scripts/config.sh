@@ -187,6 +187,42 @@ fi
 : "${TERRAIN_CLASS_MIN_ZOOM:=12}"
 : "${TERRAIN_CLASS_MAX_ZOOM:=14}"
 
+# --- 3-D map elevation copy (SNOW-1444) -------------------------------------
+#
+# Our own copy of Mapterhorn's Terrarium WebP tiles, clipped to Snowdesk's
+# supported area, served at /dem/<version>/{z}/{x}/{y}.webp for
+# snowdesk-data-pipeline's /map/3d/ (MAP_3D_DEM_TILE_URL). Mapterhorn asks users
+# to copy its archives rather than hotlink tiles.mapterhorn.com.
+#
+# Unlike the tilesets above, the version is part of the bucket key: each refresh
+# is a new dem/<version>/ beside the last, and the Worker reads the version it is
+# asked for, so a rollback is an env change on the Django side. There is no
+# default version: build-dem.sh takes it as an argument, so a refresh cannot
+# overwrite the copy production is reading by accident.
+
+# Where Mapterhorn's archives and their catalogue (download_urls.json) are read
+# from. pmtiles extract reads byte ranges over HTTP, so nothing is downloaded
+# whole.
+: "${DEM_SOURCE_ORIGIN:=https://download.mapterhorn.com}"
+
+# The area the copy covers, written by snowdesk-data-pipeline's
+# `manage.py export_supported_area` and committed here so a build is
+# reproducible and its coverage reviewable in a diff.
+: "${DEM_AREA:=dem/supported-area.geojson}"
+
+# Deepest zoom extracted. The 3-D map's raster-dem source stops at z15
+# (DEM_MAX_ZOOM in static/js/map_3d_core.js), and each zoom past it would
+# quadruple the copy. Keep in step with DEM_MAX_ZOOM in worker/src/dem.js.
+: "${DEM_MAX_ZOOM:=15}"
+
+# Subdirectory of DIST_DIR, and the bucket prefix: dist/dem/<version>/ holds
+# planet.pmtiles, one 6-<x>-<y>.pmtiles per regional archive and manifest.json.
+: "${DEM_DIR:=dem}"
+
+# Downloads in flight per extract. Mapterhorn's mirror is Cloudflare R2, so
+# this is about latency, not politeness to a small server.
+: "${DEM_DOWNLOAD_THREADS:=8}"
+
 # Upstream OpenFreeMap origin the assets are mirrored from.
 : "${UPSTREAM_ORIGIN:=https://tiles.openfreemap.org}"
 : "${UPSTREAM_STYLE_URL:=${UPSTREAM_ORIGIN}/styles/liberty}"
@@ -208,3 +244,4 @@ export TERRAIN_VERSION TERRAIN_TILE_PATH TERRAIN_DIR TERRAIN_BBOX TERRAIN_GSD
 export TERRAIN_WORK_DIR TERRAIN_JOBS
 export TERRAIN_CLASS_VERSION TERRAIN_CLASS_DIR TERRAIN_CLASS_WORK_DIR
 export TERRAIN_CLASS_MIN_ZOOM TERRAIN_CLASS_MAX_ZOOM
+export DEM_SOURCE_ORIGIN DEM_AREA DEM_MAX_ZOOM DEM_DIR DEM_DOWNLOAD_THREADS

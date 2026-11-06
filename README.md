@@ -41,6 +41,9 @@ entry) lives in `snowdesk-data-pipeline` under SNOW-242.
 | `scripts/classify_terrain.py` | Classifies `grid.raw` into three EPSG:3035 class planes. The one numpy script. |
 | `scripts/cut_terrain_class_tiles.py` | Cuts the warped class rasters into PNG tiles, and writes `tiles.json`. |
 | `scripts/build-terrain-class.sh` | Runs the two above plus `gdalwarp` → `dist/terrain-class/`. After `build-terrain.sh`. |
+| `dem/supported-area.geojson` | Snowdesk's supported area, from the pipeline's `export_supported_area`. What the elevation copy is clipped to. |
+| `scripts/dem_archives.py` | Picks the Mapterhorn archives the area touches, writes the copy's `manifest.json`, and turns a point into a tile. |
+| `scripts/build-dem.sh` | `pmtiles extract --region` from Mapterhorn → `dist/dem/<version>/`. On a VM; ~80 GB free. |
 | `scripts/verify.sh` | Acceptance checks against the live origin. |
 | `worker/` | Worker serving XYZ tiles, and the CORS allowlist (`ALLOWED_ORIGINS`). `npm test` runs its routing tests. |
 
@@ -97,6 +100,12 @@ The Worker (`worker/`) owns the hostname and answers everything:
   answering `204`. `/terrain-class/<version>/tiles.json` is the descriptor and
   the pixel contract. Both bucket-backed tilesets are one table in
   `worker/src/tilesets.js`.
+- `/dem/<version>/{z}/{x}/{y}.webp` — the 3-D map's elevation tiles, our copy
+  of Mapterhorn's. Unlike the three above, **the version is real**: each copy
+  is its own set of archives under `dem/<version>/`, so going back to the last
+  one is an env change in the pipeline. z0–12 read `planet.pmtiles`, z13–15
+  the archive of the tile's z6 ancestor. Outside the copy, or past z15, the
+  answer is `204`. See [the elevation copy](#the-3-d-elevation-copy) below.
 - Everything else — style, sprites, glyphs, the Natural Earth raster — passed
   through to the bucket, returning each object's stored `Content-Type` and
   `Cache-Control` (the values `upload.sh` set; R2 infers neither).
@@ -840,6 +849,102 @@ GLO-30 as source number two.
 Storage is the only ongoing cost and it is the reason the grid can be this fine.
 3.6 GB in R2 is about five cents a month, egress is free, and the writes are
 one-off. There is no dyno, no schedule and nothing to keep alive.
+
+## The 3-D elevation copy
+
+SNOW-1444. The pipeline's `/map/3d/` draws its relief from Terrarium-encoded
+elevation tiles (512 px lossless WebP). They come from
+[Mapterhorn](https://mapterhorn.com), which asks users to copy its archives
+rather than hotlink `tiles.mapterhorn.com`. This is that copy, clipped to
+Snowdesk's **supported area**: every z12 tile touching a region boundary, plus
+a ring of one tile. That area is `dem/supported-area.geojson`, written by the
+pipeline's `export_supported_area` and committed here so that a build is
+reproducible from this repo alone.
+
+Where the copy has no tile the Worker answers `204`, and the 3-D map loads that
+one tile from AWS's public Terrarium set instead. So the map is never blank
+outside our area; it just stops being ours.
+
+### What is in a copy
+
+Mapterhorn publishes z0–12 as one `planet.pmtiles` (355 GB) and z13 and deeper
+as one archive per z6 tile, `6-<x>-<y>.pmtiles`, listed with their bounds in
+`download_urls.json`. The copy keeps that split — the pmtiles CLI has no merge,
+and one archive per region can be rebuilt on its own:
+
+| Object | Holds |
+| --- | --- |
+| `dem/<version>/planet.pmtiles` | z0–12, clipped to the area. Required: without it the Worker answers `404`, uncached. |
+| `dem/<version>/6-<x>-<y>.pmtiles` | z13–15 for one z6 tile. Only the seven the area overlaps are built; a missing one is ordinary and answers `204`. |
+| `dem/<version>/manifest.json` | The Mapterhorn release, each archive's source md5, the area's sha256 and the build time. Uploaded last, so its presence means the copy is complete. |
+
+`pmtiles extract --region` reads only the byte ranges inside the area, so none
+of Mapterhorn's archives is downloaded whole. The copy stops at z15 because the
+3-D map's `raster-dem` source does (`DEM_MAX_ZOOM` in `config.sh`, in
+`worker/src/dem.js` and in the pipeline's `map_3d_core.js`; a test pins the
+first two together).
+
+### Build, publish and verify
+
+On a throwaway VM, like the vector build — `vm-build.sh` installs the pmtiles
+CLI, runs `build-dem.sh` and then `upload.sh`:
+
+```bash
+./scripts/vm-build.sh dem 2026-11
+```
+
+Or by hand, with the pmtiles CLI on `PATH`:
+
+```bash
+./scripts/build-dem.sh 2026-11                              # → dist/dem/2026-11/
+op run --env-file=.env.1password -- ./scripts/upload.sh     # publishes every dist/dem/*/
+cd worker && npx wrangler deploy && cd ..                   # once, for the /dem/ route
+DEM_VERSION=2026-11 ./scripts/verify.sh
+```
+
+Name the version after the month it was cut. Every archive resumes: one already
+in `dist/` is kept unless `FORCE_DEM=1`. `upload.sh` will not replace a version
+whose `manifest.json` is already in the bucket, because production may be
+reading it; `FORCE_DEM_PUBLISH=1` overrides that, for a copy nobody points at
+yet.
+
+`verify.sh` with `DEM_VERSION` checks the manifest, a real tile with relief in
+it at both zoom bands in the Alps, the Pyrenees and Corsica, a `204` outside the
+area and past z15, and CORS for the site.
+
+Then, in the pipeline, set:
+
+```
+MAP_3D_DEM_TILE_URL=https://tiles.snowdesk-data.info/dem/2026-11/{z}/{x}/{y}.webp
+```
+
+### Refresh and rollback
+
+Once a season, or when Mapterhorn improves a source we use:
+
+1. Run `export_supported_area` in the pipeline against production data and
+   commit the new `dem/supported-area.geojson` here.
+2. Build and publish a **new** version, and verify it.
+3. Point `MAP_3D_DEM_TILE_URL` at it.
+4. Keep the previous version in the bucket until the next refresh, then delete
+   it with `aws s3 rm --recursive s3://<bucket>/dem/<old-version>/`.
+
+Rollback is step 3 with the previous version. Nothing is rebuilt, nothing is
+deployed, and no cache has to expire, because the two copies never share a URL.
+
+### Cost
+
+The z15 copy of the area is an estimated 20–40 GB, so with two versions kept
+storage is around a dollar a month. Egress is free and the writes are one-off.
+The build reads Mapterhorn's archives over HTTP from the VM, a few tens of GB
+per refresh.
+
+### Attribution
+
+Mapterhorn compiles its tiles from many open elevation sources, each with its
+own terms, and lists them at <https://mapterhorn.com/attribution>. The 3-D map
+already credits `© Mapterhorn` with that link; a copy changes where the bytes
+come from, not whose data they are.
 
 ## Development
 

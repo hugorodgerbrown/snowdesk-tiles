@@ -15,7 +15,8 @@
 // edge on repeat reads.
 //
 // It also serves the terrain elevation grid under /terrain/ (SNOW-908) and the
-// terrain-class tiles derived from it under /terrain-class/ (SNOW-987). The
+// terrain-class tiles derived from it under /terrain-class/ (SNOW-987), and the
+// 3-D map's elevation tiles under /dem/<version>/ (SNOW-1444, see dem.js). The
 // first are not map tiles — nothing renders them; Django reads Int16 heights out
 // of them per point to get a slope angle. The second are PNG map tiles whose
 // pixels are data, not colour: height, slope band and aspect octant. Both live
@@ -48,6 +49,7 @@ import {
   serveTileset,
   tilesetFor,
 } from "./tilesets.js";
+import { DEM_PREFIX, MissingArchiveError, serveDem } from "./dem.js";
 
 // /tiles/<version>/{z}/{x}/{y}.mvt — the version segment is captured and then
 // ignored. It exists to give a rebuilt archive fresh URLs: tiles are immutable
@@ -90,7 +92,9 @@ class R2Source {
       range: { offset, length },
     });
     if (!object) {
-      throw new Error(`archive not found in bucket: ${this.key}`);
+      // A typed error so the /dem/ route can tell "no archive here" (an
+      // ordinary 204 for a regional archive) from a read that went wrong.
+      throw new MissingArchiveError(this.key);
     }
     return { data: await object.arrayBuffer() };
   }
@@ -255,7 +259,14 @@ export default {
 
     let response;
     const tileset = tilesetFor(url.pathname);
-    if (tileset) {
+    if (url.pathname.startsWith(DEM_PREFIX)) {
+      // The 3-D map's elevation tiles (SNOW-1444): our copy of Mapterhorn's,
+      // one set of archives per version. Routing is in dem.js.
+      response = await serveDem(
+        url,
+        (key) => new PMTiles(new R2Source(env.BUCKET, key)),
+      );
+    } else if (tileset) {
       // Elevation and class tiles, cached through the same path as vector
       // tiles: they are immutable within a version, ingest-time sampling reads
       // the same handful of elevation tiles for every route in a region, and a

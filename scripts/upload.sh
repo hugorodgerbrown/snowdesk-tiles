@@ -190,6 +190,47 @@ if mirrored "$TERRAIN_CLASS_DIR"; then
         --cache-control "$STYLE_CACHE"
 fi
 
+echo "==> 3-D elevation copy"
+# One directory per version, each a handful of multi-GB archives plus
+# manifest.json. Versions sit side by side in the bucket and the Worker reads
+# the one it is asked for, so this never deletes anything: retiring an old
+# version is a deliberate `aws s3 rm --recursive s3://<bucket>/dem/<version>/`,
+# once production no longer reads it.
+#
+# A version already in the bucket is skipped, never replaced. Production reads a
+# version by name, and its tiles are cached immutable for a year, so replacing
+# one in place would mix two builds under one URL with no way back. Skipping
+# rather than failing lets a box that published a copy go on to publish other
+# things. An upload interrupted before manifest.json (the last object) landed is
+# not yet published, so a rerun simply resumes it. FORCE_DEM_PUBLISH=1 replaces
+# a published version, and is only safe for one no client has ever read.
+if mirrored "$DEM_DIR"; then
+    for dir in "${DIST_DIR}/${DEM_DIR}"/*/; do
+        version=$(basename "$dir")
+        if [ ! -f "${dir}manifest.json" ] || [ ! -f "${dir}planet.pmtiles" ]; then
+            echo "error: ${dir} has no manifest.json or planet.pmtiles — an unfinished" >&2
+            echo "       build-dem.sh; not publishing it" >&2
+            exit 1
+        fi
+        if aws s3api head-object --endpoint-url "$R2_ENDPOINT" --bucket "$R2_BUCKET" \
+            --key "${DEM_DIR}/${version}/manifest.json" >/dev/null 2>&1 \
+            && [ "${FORCE_DEM_PUBLISH:-0}" != "1" ]; then
+            echo "    ${version}: already published — skipping; a refresh is a new version"
+            continue
+        fi
+        echo "    ${version}"
+        s3 sync "$dir" "s3://${R2_BUCKET}/${DEM_DIR}/${version}" \
+            --exclude '*' --include '*.pmtiles' \
+            --content-type application/octet-stream \
+            --cache-control "$IMMUTABLE_CACHE"
+        # Last: it is what marks the version as published, above and in
+        # verify.sh.
+        s3 cp "${dir}manifest.json" "s3://${R2_BUCKET}/${DEM_DIR}/${version}/manifest.json" \
+            --content-type application/json \
+            --cache-control "$IMMUTABLE_CACHE"
+    done
+fi
+
 echo "==> style (published last)"
 # Same rule as the mirror directories, for the same reason: absent means "not
 # rebuilt", never "delete it". build-terrain.sh stages only dist/terrain/ (and
@@ -210,8 +251,9 @@ if [ "$published" -eq 0 ]; then
 error: nothing staged in ${DIST_DIR}/ — published nothing
 
 Run ./scripts/build.sh for the style and the mirrored assets,
-./scripts/build-terrain.sh for the elevation tileset, or
-./scripts/build-terrain-class.sh for the class tiles, then rerun this.
+./scripts/build-terrain.sh for the elevation tileset,
+./scripts/build-terrain-class.sh for the class tiles, or
+./scripts/build-dem.sh <version> for the 3-D elevation copy, then rerun this.
 EOF
     exit 1
 fi

@@ -125,3 +125,18 @@ def test_terrain_class_zooms_match_the_contract_and_the_worker() -> None:
     assert int(config_value("TERRAIN_CLASS_MAX_ZOOM")) == MAX_ZOOM
     assert f"minZoom: {MIN_ZOOM}," in worker
     assert f"maxZoom: {MAX_ZOOM}," in worker
+
+
+def test_dem_zooms_match_the_worker() -> None:
+    # The elevation copy (SNOW-1444): build-dem.sh extracts the regional
+    # archives to DEM_MAX_ZOOM and dem.js answers 204 past it without reading
+    # R2. A build deeper than the Worker publishes tiles nobody can reach; one
+    # shallower leaves the Worker opening archives for tiles they do not hold.
+    worker = (CONFIG.parents[1] / "worker" / "src" / "dem.js").read_text()
+    build = (CONFIG.parent / "build-dem.sh").read_text()
+    max_zoom = int(config_value("DEM_MAX_ZOOM"))
+
+    assert f"export const DEM_MAX_ZOOM = {max_zoom};" in worker
+    # The planet archive's split, stated in the build and in the Worker.
+    assert "export const DEM_PLANET_MAX_ZOOM = 12;" in worker
+    assert "extract planet.pmtiles 12" in build

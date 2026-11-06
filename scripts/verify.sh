@@ -384,6 +384,68 @@ print(json.dumps({k: doc.get(k) for k in ["minzoom", "maxzoom", "tile_size",
         "$(status "${class_url}/${z}/${x}/${y}.png")"
 fi
 
+# The 3-D map's elevation copy (SNOW-1444). There is no default version — the
+# one to check is the one about to go live, or the one production reads — so
+# the section runs only when DEM_VERSION is set:
+#
+#     DEM_VERSION=2026-11 ./scripts/verify.sh
+#
+# Checked: the manifest marks the version as published, real tiles come back as
+# WebP with the year-long immutable Cache-Control at the corners of the area
+# (both zoom bands, so planet.pmtiles and the regional archives are both
+# there), ground outside the area and a zoom past the copy are 204 — which the
+# 3-D map reads as "take AWS's tile" — and the site origin may read them.
+if [ -z "${DEM_VERSION:-}" ]; then
+    echo
+    echo "  skip  3-D elevation checks (set DEM_VERSION to check a copy)"
+else
+    echo
+    dem_url="${TILES_ORIGIN}/${DEM_DIR}/${DEM_VERSION}"
+    # Read off the Worker, so this cannot drift from what it sends.
+    tile_cache=$(sed -n 's/^export const TILE_CACHE_CONTROL = "\(.*\)";/\1/p' worker/src/tilesets.js)
+    check "dem: manifest responds" 200 "$(status "${dem_url}/manifest.json")"
+    check "dem: manifest is json" "application/json" \
+        "$(content_type "${dem_url}/manifest.json")"
+
+    # A 512 px Terrarium tile over mountains is tens of kB; a few hundred bytes
+    # would be a tile of one flat colour, which reads as a plateau at 0 m.
+    : "${MIN_DEM_TILE_BYTES:=10000}"
+    elevation_tile() {
+        local label=$1 lon=$2 lat=$3 zoom=$4 z x y tile bytes
+        read -r z x y < <(python3 scripts/dem_archives.py locate "$lon" "$lat" "$zoom")
+        tile="${dem_url}/${z}/${x}/${y}.webp"
+        check "dem: ${label} z${z} responds" 200 "$(status "$tile")"
+        check "dem: ${label} z${z} is webp" "image/webp" "$(content_type "$tile")"
+        check "dem: ${label} z${z} is immutable" "$tile_cache" "$(header "$tile" cache-control)"
+        bytes=$(curl -s -o /dev/null -w '%{size_download}' "$tile")
+        if [ "$bytes" -ge "$MIN_DEM_TILE_BYTES" ]; then
+            printf '  ok    dem: %s z%s holds relief (%s bytes)\n' "$label" "$z" "$bytes"
+        else
+            printf '  FAIL  dem: %s z%s is flat or empty (%s bytes)\n' "$label" "$z" "$bytes"
+            failures=$((failures + 1))
+        fi
+    }
+    elevation_tile "Zermatt" 7.7491 46.0207 12
+    elevation_tile "Zermatt" 7.7491 46.0207 15
+    elevation_tile "Grossglockner" 12.6939 47.0744 15
+    elevation_tile "Pyrenees (Vignemale)" -0.1414 42.7742 15
+    elevation_tile "Corsica (Monte Cinto)" 8.9456 42.3797 14
+
+    nothing_here() {
+        local label=$1 lon=$2 lat=$3 zoom=$4 z x y
+        read -r z x y < <(python3 scripts/dem_archives.py locate "$lon" "$lat" "$zoom")
+        check "dem: 204 ${label}" 204 "$(status "${dem_url}/${z}/${x}/${y}.webp")"
+    }
+    nothing_here "outside the area at z12 (Paris)" 2.3522 48.8566 12
+    nothing_here "with no regional archive (mid-Atlantic z14)" -30.0 40.0 14
+    nothing_here "past the copy's zoom (Zermatt z16)" 7.7491 46.0207 16
+
+    read -r z x y < <(python3 scripts/dem_archives.py locate 7.7491 46.0207 12)
+    acao=$(curl -sI -H "Origin: ${SITE_ORIGIN}" "${dem_url}/${z}/${x}/${y}.webp" \
+        | tr -d '\r' | grep -i '^access-control-allow-origin:' | cut -d' ' -f2- || true)
+    check "dem: CORS allows ${SITE_ORIGIN}" "$SITE_ORIGIN" "${acao:-<none>}"
+fi
+
 # Content-Type is fixed at upload time and R2 does not infer it. A wrong one
 # fails inside MapLibre rather than at the HTTP layer, so every status check
 # above can pass while the map renders nothing.
