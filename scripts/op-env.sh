@@ -13,8 +13,9 @@
 #
 #     op run --env-file=.env.1password -- <script> <args>
 #
-# so `./scripts/upload.sh` is the whole command. op resolves the op://
-# references in .env.1password at launch and hands the values to that one
+# so `./scripts/upload.sh` is the whole command. Only the missing names are
+# resolved; a value already set is never replaced by the stored one. op
+# resolves the op:// references at launch and hands the values to that one
 # process: nothing is written to disk and nothing reaches shell history. On a
 # laptop the desktop app unlocks it (Touch ID); on a VM, OP_SERVICE_ACCOUNT_TOKEN
 # does (see vm-build.sh).
@@ -54,6 +55,17 @@ op_reexec() {
         return 0
     fi
 
+    # Only the missing names go to op. An env file outranks the shell in op
+    # run's precedence, so handing it all of OP_ENV_FILE would replace a value
+    # the caller set on purpose (another account, say) with the stored one.
+    # The temporary file holds op:// references, not secrets, and the child
+    # removes it before it runs the script.
+    local refs pattern
+    refs=$(mktemp "${TMPDIR:-/tmp}/snowdesk-op.XXXXXX")
+    pattern="^($(IFS='|'; echo "${missing[*]}"))="
+    grep -E "$pattern" "$OP_ENV_FILE" >"$refs" || true
+
     echo "==> resolving ${missing[*]} from 1Password (${OP_ENV_FILE})" >&2
-    SNOWDESK_OP_RUN=1 exec op run --env-file="$OP_ENV_FILE" -- "$script" "$@"
+    SNOWDESK_OP_RUN=1 exec op run --env-file="$refs" -- \
+        bash -c 'rm -f "$0"; exec "$@"' "$refs" "$script" "$@"
 }
