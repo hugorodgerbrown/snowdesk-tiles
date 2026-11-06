@@ -25,9 +25,20 @@
 # Not `curl ... | bash`: the prompts below read from stdin, which that form has
 # already given to the script itself.
 #
-# It prompts for the three R2 values rather than taking them on the command line,
-# so they stay out of shell history and the process table. Set them in the
-# environment beforehand if you would rather (CI, say).
+# Credentials, in order of preference:
+#
+#   1. Already in the environment (CI, say): used as they are.
+#   2. A 1Password service account token. It asks for one first; paste it and
+#      the script installs the 1Password CLI and resolves the R2 values from
+#      .env.1password itself (scripts/op-env.sh), so one secret crosses to the
+#      box instead of three. A service account cannot read a Private vault, so
+#      the item must sit in a vault the account is granted; point OP_ENV_FILE
+#      at a references file for that vault if it is not the one in
+#      .env.1password.
+#   3. Press Enter at that prompt and it asks for the three R2 values instead.
+#
+# All prompts read with -s rather than taking values on the command line, so
+# they stay out of shell history and the process table.
 #
 # Use an R2 token scoped to Object Read & Write, and destroy the VM when the
 # build is done — the credentials are in its memory, and deleting the box is the
@@ -81,6 +92,53 @@ prompt_secret() {
     [ -n "$value" ] || { echo "error: ${name} is required" >&2; exit 1; }
     export "$name=$value"
 }
+
+# The 1Password CLI, from 1Password's own apt repository, verified with their
+# signing key — the steps in their Linux install guide.
+install_op_cli() {
+    if command -v op >/dev/null 2>&1; then return; fi
+    command -v apt-get >/dev/null 2>&1 || {
+        echo "error: install the 1Password CLI (op) yourself on a non-Debian host" >&2
+        exit 1
+    }
+    echo "==> installing the 1Password CLI"
+    local arch key=/usr/share/keyrings/1password-archive-keyring.gpg
+    local policy=AC2D62742012EA22
+    arch=$(dpkg --print-architecture)
+    sudo apt-get update -qq
+    sudo apt-get install -y -qq curl gpg
+    curl -fsS https://downloads.1password.com/linux/keys/1password.asc \
+        | sudo gpg --batch --yes --dearmor --output "$key"
+    echo "deb [arch=${arch} signed-by=${key}] https://downloads.1password.com/linux/debian/${arch} stable main" \
+        | sudo tee /etc/apt/sources.list.d/1password.list >/dev/null
+    sudo mkdir -p "/etc/debsig/policies/${policy}" "/usr/share/debsig/keyrings/${policy}"
+    curl -fsS https://downloads.1password.com/linux/debian/debsig/1password.pol \
+        | sudo tee "/etc/debsig/policies/${policy}/1password.pol" >/dev/null
+    curl -fsS https://downloads.1password.com/linux/keys/1password.asc \
+        | sudo gpg --batch --yes --dearmor --output "/usr/share/debsig/keyrings/${policy}/debsig.gpg"
+    sudo apt-get update -qq
+    sudo apt-get install -y -qq 1password-cli
+}
+
+r2_names=(CLOUDFLARE_ACCOUNT_ID AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY)
+r2_missing=0
+for name in "${r2_names[@]}"; do [ -n "${!name:-}" ] || r2_missing=1; done
+if [ "$r2_missing" = 1 ] && [ -z "${SNOWDESK_OP_RUN:-}" ] && [ "${USE_1PASSWORD:-1}" != "0" ]; then
+    if [ -z "${OP_SERVICE_ACCOUNT_TOKEN:-}" ]; then
+        printf '1Password service account token (Enter to type the R2 values instead): ' >&2
+        read -rs OP_SERVICE_ACCOUNT_TOKEN
+        printf '\n' >&2
+    fi
+    if [ -n "${OP_SERVICE_ACCOUNT_TOKEN:-}" ]; then
+        export OP_SERVICE_ACCOUNT_TOKEN
+        install_op_cli
+        # shellcheck source=scripts/op-env.sh
+        source scripts/op-env.sh
+        # Re-runs this script under op run, so the build and upload.sh below
+        # see the values; it does not return.
+        op_reexec "${PWD}/scripts/vm-build.sh" "${r2_names[@]}" -- "$@"
+    fi
+fi
 
 prompt_secret CLOUDFLARE_ACCOUNT_ID "Cloudflare account ID"
 prompt_secret AWS_ACCESS_KEY_ID     "R2 access key ID"

@@ -78,5 +78,5 @@ python3 scripts/dem_archives.py manifest "$version" "$DEM_AREA" "$catalogue" \
 rm -f "$catalogue"
 
 echo "==> built ${out} ($(du -sh "$out" | cut -f1))"
-echo "    publish with: op run --env-file=.env.1password -- ./scripts/upload.sh"
+echo "    publish with: ./scripts/upload.sh"
 echo "    then: DEM_VERSION=${version} ./scripts/verify.sh"

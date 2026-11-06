@@ -223,7 +223,7 @@ done
 echo
 echo "==> ${out} ready: $(du -sh "$out" | cut -f1)"
 echo "    deploy the Worker first if it predates SNOW-987: cd worker && npx wrangler deploy"
-echo "    publish with: op run --env-file=.env.1password -- ./scripts/upload.sh"
+echo "    publish with: ./scripts/upload.sh"
 echo "    then:         ./scripts/verify.sh"
 echo
 echo "    ${work} holds ~$(du -sh "$work" 2>/dev/null | cut -f1) of intermediates"

@@ -5,20 +5,27 @@
 # domain. Idempotent. CORS is not set here — see the note by the bucket create
 # step; the allowlist lives in worker/wrangler.toml.
 #
-# Requires wrangler (npx wrangler) authenticated against the Cloudflare account,
-# and CLOUDFLARE_ZONE_ID for the snowdesk-data.info zone.
+# Requires wrangler (npx wrangler), CLOUDFLARE_API_TOKEN and
+# CLOUDFLARE_ACCOUNT_ID, and CLOUDFLARE_ZONE_ID for the snowdesk-data.info zone.
+# Missing ones come from 1Password through the op CLI, which this script runs
+# itself (scripts/op-env.sh).
 #
 # PREREQUISITE: snowdesk-data.info must be added as a zone in the same
 # Cloudflare account as the bucket, on Cloudflare nameservers. R2 custom domains
 # are only available for zones Cloudflare hosts — there is no CNAME-in from an
 # external DNS provider below the Business plan.
 #
-#     CLOUDFLARE_ZONE_ID=... ./scripts/setup-bucket.sh
+#     ./scripts/setup-bucket.sh
 
 set -euo pipefail
 cd "$(dirname "$0")/.."
 # shellcheck source=scripts/config.sh
 source scripts/config.sh
+# shellcheck source=scripts/op-env.sh
+source scripts/op-env.sh
+# The zone id is left off: it is optional (below), so its absence alone should
+# not be what sends the run through op.
+op_reexec scripts/setup-bucket.sh CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID -- "$@"
 
 # CLOUDFLARE_ZONE_ID is optional on purpose: the bucket and its CORS policy can
 # be created before the zone is live on Cloudflare, so a pending nameserver
@@ -51,9 +58,9 @@ An R2 API token created from the R2 page shows both a "Token value" (this
 variable) and an S3 access key pair (what upload.sh uses). They are different
 credentials from the same item.
 
-Then run through 1Password so the value never reaches your shell history:
-
-    op run --env-file=.env.1password -- ./scripts/setup-bucket.sh
+Add it to the 1Password item that .env.1password points at, and install the
+1Password CLI (op): this script then resolves it itself, and the value never
+reaches your shell history.
 EOF
     exit 1
 fi
@@ -71,9 +78,8 @@ error: CLOUDFLARE_ACCOUNT_ID is not set
 
 Without it wrangler tries to resolve the account through /memberships, which an
 account-scoped R2 token has no permission to read. Find the id on the R2
-overview page in the Cloudflare dashboard.
-
-    op run --env-file=.env.1password -- ./scripts/setup-bucket.sh
+overview page in the Cloudflare dashboard, and add it to the 1Password item
+that .env.1password points at.
 EOF
     exit 1
 fi

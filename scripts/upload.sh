@@ -14,11 +14,17 @@
 #     AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY   (an R2 API token pair)
 #
 #     ./scripts/upload.sh
+#
+# Any that are missing come from 1Password through the op CLI, which this
+# script runs itself (scripts/op-env.sh). Set them yourself to skip it.
 
 set -euo pipefail
 cd "$(dirname "$0")/.."
 # shellcheck source=scripts/config.sh
 source scripts/config.sh
+# shellcheck source=scripts/op-env.sh
+source scripts/op-env.sh
+op_reexec scripts/upload.sh CLOUDFLARE_ACCOUNT_ID AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY -- "$@"
 
 : "${CLOUDFLARE_ACCOUNT_ID:?set CLOUDFLARE_ACCOUNT_ID (Cloudflare dashboard > R2)}"
 : "${AWS_ACCESS_KEY_ID:?set AWS_ACCESS_KEY_ID from an R2 API token}"
