@@ -15,6 +15,7 @@ import { test } from "node:test";
 import {
   DEM_MAX_ZOOM,
   MissingArchiveError,
+  isDemManifest,
   resolveDem,
   serveDem,
 } from "../src/dem.js";
@@ -80,6 +81,19 @@ test("anything that is not a tile path is not found", () => {
     "/dem/2026-11/planet.pmtiles",
   ]) {
     assert.equal(resolveDem(path).kind, "not-found", path);
+  }
+});
+
+test("a copy's manifest is told apart, for index.js to serve from the bucket", () => {
+  assert.equal(isDemManifest("/dem/2026-11/manifest.json"), true);
+  for (const path of [
+    "/dem/manifest.json",
+    "/dem/../manifest.json",
+    "/dem/2026-11/sub/manifest.json",
+    "/dem/2026-11/planet.pmtiles",
+    ZERMATT_Z12,
+  ]) {
+    assert.equal(isDemManifest(path), false, path);
   }
 });
 

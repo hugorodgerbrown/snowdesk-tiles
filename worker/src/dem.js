@@ -44,6 +44,16 @@ export const DEM_MAX_ZOOM = 15;
 // token: no slashes, no dots at the start, nothing that could walk the bucket.
 const DEM_PATH = /^\/dem\/([A-Za-z0-9][A-Za-z0-9_-]*)\/(\d+)\/(\d+)\/(\d+)\.webp$/;
 
+// A copy's manifest.json, which upload.sh publishes last and verify.sh reads to
+// tell a finished publish from an interrupted one. It is a plain bucket object,
+// so index.js passes it to serveObject; every other /dem/ path comes here.
+const DEM_MANIFEST_PATH = /^\/dem\/[A-Za-z0-9][A-Za-z0-9_-]*\/manifest\.json$/;
+
+/** Whether a path is a copy's manifest, served as a bucket object. */
+export function isDemManifest(pathname) {
+  return DEM_MANIFEST_PATH.test(pathname);
+}
+
 /** The archive behind a tile could not be found in the bucket. */
 export class MissingArchiveError extends Error {
   constructor(key) {

@@ -49,7 +49,7 @@ import {
   serveTileset,
   tilesetFor,
 } from "./tilesets.js";
-import { DEM_PREFIX, MissingArchiveError, serveDem } from "./dem.js";
+import { DEM_PREFIX, MissingArchiveError, isDemManifest, serveDem } from "./dem.js";
 
 // /tiles/<version>/{z}/{x}/{y}.mvt — the version segment is captured and then
 // ignored. It exists to give a rebuilt archive fresh URLs: tiles are immutable
@@ -259,7 +259,10 @@ export default {
 
     let response;
     const tileset = tilesetFor(url.pathname);
-    if (url.pathname.startsWith(DEM_PREFIX)) {
+    if (isDemManifest(url.pathname)) {
+      // A copy's manifest is an ordinary bucket object (SNOW-1444).
+      return withCors(await serveObject(request, env), cors);
+    } else if (url.pathname.startsWith(DEM_PREFIX)) {
       // The 3-D map's elevation tiles (SNOW-1444): our copy of Mapterhorn's,
       // one set of archives per version. Routing is in dem.js.
       response = await serveDem(
