@@ -162,16 +162,16 @@ if [ "$mapterhorn" = 1 ]; then
     if [ "$coverage" = tarballs ]; then
         # Mapterhorn publishes no single coverage file; each source tarball
         # opens with one. Read just those, over HTTP ranges.
+        # Rebuilt every run, from the GeoPackages kept in coverage/, so a
+        # changed bbox never reuses polygons filtered to the old one.
         coverage="${m_dir}/coverage.geojson"
-        if [ ! -s "$coverage" ]; then
-            # shellcheck disable=SC2086 - four numbers
-            "$python" scripts/mapterhorn_sources.py coverage \
-                --attribution "${m_dir}/attribution.json" \
-                --bbox $TERRAIN_MAPTERHORN_BBOX \
-                --work "${m_dir}/coverage" \
-                --out "${coverage}.part"
-            mv "${coverage}.part" "$coverage"
-        fi
+        # shellcheck disable=SC2086 - four numbers
+        "$python" scripts/mapterhorn_sources.py coverage \
+            --attribution "${m_dir}/attribution.json" \
+            --bbox $TERRAIN_MAPTERHORN_BBOX \
+            --work "${m_dir}/coverage" \
+            --out "${coverage}.part"
+        mv "${coverage}.part" "$coverage"
     fi
     case $coverage in
         http://* | https://*)
