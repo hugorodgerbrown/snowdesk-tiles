@@ -51,12 +51,12 @@ test("each prefix finds its own tileset", () => {
   assert.equal(tilesetFor("/styles/liberty"), null);
 });
 
-test("a class tile is served as PNG with the version stripped", async () => {
+test("a class tile is served as PNG from its version's prefix", async () => {
   const { response, reads } = await serve("/terrain-class/v7/14/8544/5827.png", {
-    "terrain-class/14/8544/5827.png": "png bytes",
+    "terrain-class/v7/14/8544/5827.png": "png bytes",
   });
 
-  assert.deepEqual(reads, ["terrain-class/14/8544/5827.png"]);
+  assert.deepEqual(reads, ["terrain-class/v7/14/8544/5827.png"]);
   assert.equal(response.status, 200);
   assert.equal(response.headers.get("Content-Type"), "image/png");
   assert.equal(response.headers.get("Cache-Control"), TILE_CACHE_CONTROL);
@@ -122,12 +122,52 @@ for (const path of [
   });
 }
 
-test("terrain tiles keep their route: octet-stream, version stripped", async () => {
-  const { response, reads } = await serve("/terrain/v3/3239/1990.s16", {
+test("terrain v1 tiles keep their unversioned keys", async () => {
+  const { response, reads } = await serve("/terrain/v1/3239/1990.s16", {
     "terrain/3239/1990.s16": "int16",
   });
 
   assert.deepEqual(reads, ["terrain/3239/1990.s16"]);
+  assert.equal(response.headers.get("Content-Type"), "application/octet-stream");
+});
+
+test("a later terrain version reads its own prefix, never v1's", async () => {
+  const { response, reads } = await serve("/terrain/v2/3239/1990.s16", {
+    "terrain/3239/1990.s16": "v1 int16",
+  });
+
+  assert.deepEqual(reads, ["terrain/v2/3239/1990.s16"]);
+  assert.equal(response.status, 204);
+});
+
+test("each version has its own descriptor", () => {
+  const terrain = tilesetFor("/terrain/");
+  const classes = tilesetFor("/terrain-class/");
+
+  assert.equal(resolve(terrain, "/terrain/v1/grid.json").key, "terrain/grid.json");
+  assert.equal(resolve(terrain, "/terrain/v2/grid.json").key, "terrain/v2/grid.json");
+  for (const legacy of ["v1", "v2"]) {
+    assert.equal(
+      resolve(classes, `/terrain-class/${legacy}/tiles.json`).key,
+      "terrain-class/tiles.json",
+    );
+  }
+  assert.equal(
+    resolve(classes, "/terrain-class/v3/tiles.json").key,
+    "terrain-class/v3/tiles.json",
+  );
+  assert.equal(
+    resolve(classes, "/terrain-class/v3/13/4280/2900.png").key,
+    "terrain-class/v3/13/4280/2900.png",
+  );
+});
+
+test("terrain tiles keep their route: octet-stream", async () => {
+  const { response, reads } = await serve("/terrain/v2/3239/1990.s16", {
+    "terrain/v2/3239/1990.s16": "int16",
+  });
+
+  assert.deepEqual(reads, ["terrain/v2/3239/1990.s16"]);
   assert.equal(response.headers.get("Content-Type"), "application/octet-stream");
 });
 

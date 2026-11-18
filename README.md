@@ -97,12 +97,16 @@ The Worker (`worker/`) owns the hostname and answers everything:
   whole. The Worker ignores the version segment; it exists so a rebuilt archive
   gets fresh URLs (see below).
 - `/terrain/<version>/{x}/{y}.s16` — elevation tiles, read straight out of the
-  bucket with the version segment stripped. Absent tiles answer `204`, not
+  bucket. `v1` reads the unversioned keys it was published under
+  (`terrain/{x}/{y}.s16`); every later version reads its own prefix
+  (`terrain/v2/{x}/{y}.s16`), so a new build sits beside the live one until the
+  app points at it (SNOW-1505). Absent tiles answer `204`, not
   `404`: most of the Alps has no source yet, so "nothing covers this ground" is
   an ordinary, cacheable answer rather than an error. `/terrain/<version>/grid.json`
   is the grid definition.
 - `/terrain-class/<version>/{z}/{x}/{y}.png` — class tiles, the same way:
-  version stripped, `image/png`, an absent tile or a zoom outside 12–14
+  `v1` and `v2` read the unversioned keys, later versions their own prefix;
+  `image/png`, an absent tile or a zoom outside 12–14
   answering `204`. `/terrain-class/<version>/tiles.json` is the descriptor and
   the pixel contract. Both bucket-backed tilesets are one table in
   `worker/src/tilesets.js`.

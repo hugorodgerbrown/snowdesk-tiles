@@ -139,6 +139,22 @@ else
         --cache-control "$IMMUTABLE_CACHE"
 fi
 
+# The bucket prefix one version of a tileset lives under (SNOW-1505). The
+# versions live before SNOW-1505 were stored unversioned and stay there; every
+# later one gets its own prefix, so a new build sits beside the live one until
+# the app is pointed at it. Keep in step with legacyVersions in
+# worker/src/tilesets.js.
+version_prefix() {
+    local dir=$1 version=$2 legacy
+    shift 2
+    for legacy in "$@"; do
+        [ "$version" = "$legacy" ] && { echo "$dir"; return; }
+    done
+    echo "${dir}/${version}"
+}
+terrain_prefix=$(version_prefix "$TERRAIN_DIR" "$TERRAIN_VERSION" v1)
+class_prefix=$(version_prefix "$TERRAIN_CLASS_DIR" "$TERRAIN_CLASS_VERSION" v1 v2)
+
 echo "==> terrain elevation tiles"
 # Tens of thousands of small objects rather than one large one, so `sync` is
 # doing real work here: a rerun after an interrupted upload transfers only what
@@ -150,7 +166,8 @@ if mirrored "$TERRAIN_DIR"; then
     # Content-Type, a short TTL, and to land last.
     # verify-gap.json (SNOW-1505) is the build's input to verify.sh, not a
     # published object; the Worker would never serve it.
-    s3 sync "${DIST_DIR}/${TERRAIN_DIR}" "s3://${R2_BUCKET}/${TERRAIN_DIR}" \
+    echo "    to ${terrain_prefix}/"
+    s3 sync "${DIST_DIR}/${TERRAIN_DIR}" "s3://${R2_BUCKET}/${terrain_prefix}" \
         --exclude 'grid.json' \
         --exclude 'verify-gap.json' \
         --content-type application/octet-stream \
@@ -159,7 +176,7 @@ if mirrored "$TERRAIN_DIR"; then
     if [ -f "${DIST_DIR}/${TERRAIN_DIR}/grid.json" ]; then
         echo "    grid definition (published last, after its tiles)"
         s3 cp "${DIST_DIR}/${TERRAIN_DIR}/grid.json" \
-            "s3://${R2_BUCKET}/${TERRAIN_DIR}/grid.json" \
+            "s3://${R2_BUCKET}/${terrain_prefix}/grid.json" \
             --content-type application/json \
             --cache-control "$STYLE_CACHE"
     else
@@ -173,9 +190,10 @@ echo "==> terrain-class tiles"
 # objects synced, and the descriptor copied last because it is the pointer the
 # browser reads the contract and the URL template from.
 #
-# Unlike the elevation tiles this sync passes --delete. The bucket keys carry no
-# version and the Worker strips it, so a tile a rebuild no longer produces would
-# otherwise go on being served as current classes rather than a 204. That makes
+# Unlike the elevation tiles this sync passes --delete, confined to this
+# version's prefix. A rebuild of the same version replaces it, so a tile the
+# rebuild no longer produces would otherwise go on being served as current
+# classes rather than a 204. That makes
 # a partial staging dangerous — it would delete every level it lacks — so a
 # directory without tiles.json, which cut_terrain_class_tiles.py writes only for
 # a build of every zoom, is refused rather than published.
@@ -186,7 +204,8 @@ if mirrored "$TERRAIN_CLASS_DIR"; then
         exit 1
     fi
     # --exclude also keeps the live tiles.json out of the deletion.
-    s3 sync "${DIST_DIR}/${TERRAIN_CLASS_DIR}" "s3://${R2_BUCKET}/${TERRAIN_CLASS_DIR}" \
+    echo "    to ${class_prefix}/"
+    s3 sync "${DIST_DIR}/${TERRAIN_CLASS_DIR}" "s3://${R2_BUCKET}/${class_prefix}" \
         --delete \
         --exclude 'tiles.json' \
         --content-type image/png \
@@ -194,7 +213,7 @@ if mirrored "$TERRAIN_CLASS_DIR"; then
 
     echo "    descriptor (published last, after its tiles)"
     s3 cp "${DIST_DIR}/${TERRAIN_CLASS_DIR}/tiles.json" \
-        "s3://${R2_BUCKET}/${TERRAIN_CLASS_DIR}/tiles.json" \
+        "s3://${R2_BUCKET}/${class_prefix}/tiles.json" \
         --content-type application/json \
         --cache-control "$STYLE_CACHE"
 fi

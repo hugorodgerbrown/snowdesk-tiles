@@ -341,8 +341,9 @@ def test_the_worker_serves_the_paths_this_module_publishes() -> None:
     template = definition("https://example.test", "v1")["tile_url_template"]
 
     assert template.endswith("/terrain/v1/{x}/{y}.s16")
-    assert r"/^\/terrain\/[^/]+\/(\d+)\/(\d+)\.s16$/" in worker
-    assert "terrain/grid.json" in worker
+    assert r"/^\/terrain\/([^/]+)\/(\d+)\/(\d+)\.s16$/" in worker
+    assert r"/^\/terrain\/([^/]+)\/grid\.json$/" in worker
+    assert 'descriptorKey: "grid.json"' in worker
 
 
 def test_definition_publishes_the_boundary_rule() -> None:
