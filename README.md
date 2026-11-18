@@ -859,26 +859,32 @@ answer 204. `TERRAIN_CLASS=0 ./scripts/verify.sh` skips the section.
 
 ### Coverage, and what is honestly missing
 
-The grid is Alps-wide from day one and only the Swiss part has data in it.
-Adding a source later ([SNOW-693], Copernicus GLO-30) is "resample a coarser
-source onto the existing grid"; the grid itself never moves. A source is a
-registry entry in `terrain_grid.py` — coverage, quality tier, native resolution,
-licence, attribution — and native resolution is recorded separately from cell
-spacing because they are not the same claim. A 30 m source on a 5 m grid is
-upsampling, which is honest only so long as nothing downstream reads 5 m cells
-as 5 m of information.
+The grid is Alps-wide by definition, and the grid itself never moves. Since
+SNOW-1505 it holds two sources. swissALTI3D (2 m) fills Switzerland and
+Liechtenstein. Our Mapterhorn copy fills the rest of the supported area, read
+at z14 and clipped to the coverage of the national models it carries: BEV in
+Austria, IGN in France, the Bolzano and Trento provinces, Bavaria, and the
+others that `grid.json`'s `credits[]` lists. swissALTI3D wins every cell it
+fills, and `compare_grids.py` stops the publish if any Swiss height would
+change.
 
-The accepted limitation, stated plainly: **the display overlay covers more
-ground than the sampling grid**. In the Vanoise or the Écrins a user will see
-slope shading under an uncoloured route line. That is not a correctness bug
-while unknown never renders as gentle — and it is the strongest argument for
-GLO-30 as source number two.
+A source is a registry entry in `terrain_grid.py`: coverage, quality tier,
+native resolution, licence and attribution. Native resolution is recorded
+separately from cell spacing because they are not the same claim.
+
+The accepted limitation, stated plainly: **ground that only Copernicus GLO-30
+covers stays absent (204)**. A 30 m model smooths out short steep pitches, so it
+reads steepness too low, which is the dangerous direction. Hugo decided on
+18 Nov 2026 to hatch that ground rather than fill it. The Pyrenees and Corsica
+are outside the build box (SNOW-1532).
 
 ### Cost
 
-Storage is the only ongoing cost and it is the reason the grid can be this fine.
-3.6 GB in R2 is about five cents a month, egress is free, and the writes are
-one-off. There is no dyno, no schedule and nothing to keep alive.
+Storage is the only ongoing cost, and it is the reason the grid can be this
+fine. The Swiss-only build was 3.6 GB in R2, about five cents a month. The
+Alps-wide build is estimated at 8–12 GB more for the grid and the class tiles
+together, under twenty cents a month. Egress is free and the writes are one-off.
+There is no dyno, no schedule and nothing to keep alive.
 
 ## The 3-D elevation copy
 

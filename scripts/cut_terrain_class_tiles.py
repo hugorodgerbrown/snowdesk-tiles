@@ -60,6 +60,7 @@ from terrain_class import (
     descriptor,
     mercator_extent,
 )
+from terrain_grid import SWISS_ONLY_ATTRIBUTION
 
 PIXEL_BYTES = 4
 ROW_BYTES = TILE_PIXELS * PIXEL_BYTES
@@ -377,6 +378,10 @@ def main(argv: list[str] | None = None) -> int:
         levels.append(level)
 
     document = tiles_json(levels, bbox, args.origin, args.version)
+    # A build with no Mapterhorn fill (an empty TERRAIN_MAPTERHORN_BBOX, the v1
+    # path) credits swisstopo alone, as grid.json does for the same build.
+    if "mapterhorn" not in (manifest.get("sources") or {}):
+        document["attribution"] = SWISS_ONLY_ATTRIBUTION
     # The descriptor promises z{MIN_ZOOM}-{MAX_ZOOM}, and so does the Worker,
     # so only a build of every level may carry one. A narrowed build (a quick
     # look at one zoom) still writes its tiles, but no tiles.json — and
