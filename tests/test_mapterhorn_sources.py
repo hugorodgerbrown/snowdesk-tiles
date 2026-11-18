@@ -9,8 +9,13 @@ that only an edge crosses into the area, and a French model far away.
 
 from __future__ import annotations
 
+import io
 import json
+import shutil
+import subprocess  # noqa: S404 - runs ogr2ogr in a GDAL-gated test
 import sys
+import tarfile
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +25,7 @@ ROOT = Path(__file__).resolve().parents[1]
 FIXTURES = ROOT / "tests" / "fixtures" / "mapterhorn"
 sys.path.insert(0, str(ROOT / "scripts"))
 
+import mapterhorn_sources  # noqa: E402
 from mapterhorn_sources import (  # noqa: E402
     attribution_entries,
     cells_met,
@@ -421,3 +427,105 @@ def test_select_cli_writes_clip_and_credits(tmp_path: Path) -> None:
     assert status == 0
     assert len(json.loads(clip.read_text())["features"]) == 2
     assert json.loads(credits.read_text())["native_resolution_m"] == 5.0
+
+
+# --- coverage ----------------------------------------------------------------
+
+
+def _tarball(members: dict[str, bytes]) -> bytes:
+    """Return an uncompressed tarball holding ``members`` in order."""
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w", format=tarfile.GNU_FORMAT) as tar:
+        for name, data in members.items():
+            info = tarfile.TarInfo(name)
+            info.size = len(data)
+            tar.addfile(info, io.BytesIO(data))
+    return buffer.getvalue()
+
+
+def _ranged(
+    blobs: dict[str, bytes], calls: list[tuple[int, int]]
+) -> Callable[[str, int, int], bytes]:
+    """Return a fetch_range stand-in serving ``blobs`` and logging each range."""
+
+    def fetch(url: str, start: int, end: int) -> bytes:
+        calls.append((start, end))
+        return blobs[url][start : end + 1]
+
+    return fetch
+
+
+def test_tar_member_reads_only_the_headers_and_the_member() -> None:
+    big = bytes(5_000_000)
+    blob = _tarball(
+        {
+            "LICENSE.pdf": b"pdf",
+            "metadata.json": b"{}",
+            "coverage.gpkg": b"GPKG-BYTES",
+            "files/huge.tif": big,
+        }
+    )
+    calls: list[tuple[int, int]] = []
+
+    data = mapterhorn_sources.tar_member(
+        "https://x/s.tar", "coverage.gpkg", _ranged({"https://x/s.tar": blob}, calls)
+    )
+
+    assert data == b"GPKG-BYTES"
+    assert sum(end - start + 1 for start, end in calls) < 4096
+
+
+def test_tar_member_takes_a_gnu_long_name() -> None:
+    name = "a/" + "x" * 120 + "/coverage.gpkg"
+    blob = _tarball({name: b"LONG"})
+    fetch = _ranged({"u": blob}, [])
+
+    assert mapterhorn_sources.tar_member("u", "coverage.gpkg", fetch) == b"LONG"
+
+
+def test_tar_member_without_the_member_fails() -> None:
+    fetch = _ranged({"u": _tarball({"LICENSE.pdf": b"pdf"})}, [])
+
+    with pytest.raises(ValueError, match="no coverage.gpkg"):
+        mapterhorn_sources.tar_member("u", "coverage.gpkg", fetch)
+
+
+@pytest.mark.skipif(shutil.which("ogr2ogr") is None, reason="needs GDAL's ogr2ogr")
+def test_coverage_keeps_sources_meeting_the_box_and_skips_glo30(
+    tmp_path: Path,
+) -> None:
+    def gpkg(west: float, south: float, east: float, north: float) -> bytes:
+        source = tmp_path / "src.geojson"
+        source.write_text(json.dumps(feature("x", rect(west, south, east, north))))
+        out = tmp_path / "src.gpkg"
+        out.unlink(missing_ok=True)
+        ogr2ogr = shutil.which("ogr2ogr") or "ogr2ogr"
+        subprocess.run(  # noqa: S603 - fixed arguments
+            [ogr2ogr, "-f", "GPKG", str(out), str(source)], check=True
+        )
+        return out.read_bytes()
+
+    blobs = {
+        "https://x/alps.tar": _tarball({"coverage.gpkg": gpkg(10.0, 46.0, 11.0, 47.0)}),
+        "https://x/baltic.tar": _tarball(
+            {"coverage.gpkg": gpkg(24.0, 56.0, 25.0, 57.0)}
+        ),
+    }
+    calls: list[tuple[int, int]] = []
+    entries = {
+        "alps": {"tarball_url": "https://x/alps.tar"},
+        "baltic": {"tarball_url": "https://x/baltic.tar"},
+        "glo30": {"tarball_url": "https://x/never.tar"},
+    }
+
+    features, met = mapterhorn_sources.coverage_features(
+        entries, (5.0, 43.7, 16.6, 48.4), tmp_path / "work", _ranged(blobs, calls)
+    )
+
+    assert met == ["alps"]
+    assert {f["properties"]["source"] for f in features} == {"alps"}
+    fetched = len(calls)
+    mapterhorn_sources.coverage_features(
+        entries, (5.0, 43.7, 16.6, 48.4), tmp_path / "work", _ranged(blobs, calls)
+    )
+    assert len(calls) == fetched  # a rerun reads the kept GeoPackages

@@ -179,10 +179,10 @@ fi
 # Mapterhorn's per-source credits, read from beside download_urls.json.
 : "${TERRAIN_MAPTERHORN_ATTRIBUTION:=${DEM_SOURCE_ORIGIN:-https://download.mapterhorn.com}/attribution.json}"
 
-# Mapterhorn's per-source coverage polygons: a GeoJSON or GeoPackage path, or an
-# http(s) URL to fetch one from. A GeoPackage is converted with ogr2ogr. Find
-# what Mapterhorn publishes with `python3 scripts/mapterhorn_sources.py probe`.
-: "${TERRAIN_MAPTERHORN_COVERAGE:=${TERRAIN_WORK_DIR}/mapterhorn/coverage.gpkg}"
+# Mapterhorn's per-source coverage polygons. `tarballs` (the default): the
+# build assembles them itself from the coverage.gpkg at the head of each source
+# tarball. Set it to a GeoJSON or GeoPackage path or URL to use another file.
+: "${TERRAIN_MAPTERHORN_COVERAGE:=tarballs}"
 
 # The live terrain version the pre-upload check compares Swiss heights against
 # (vm-build.sh terrain), and the seed that picks its sample tiles. The seed is
