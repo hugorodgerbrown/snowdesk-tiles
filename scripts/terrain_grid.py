@@ -57,6 +57,10 @@ Usage:
     curl -s .../terrain/v1/3238/2005.s16 \
         | python scripts/terrain_grid.py read-cell 44 112
     python scripts/terrain_grid.py gdal-args
+    python scripts/terrain_grid.py profile-points
+    python scripts/terrain_grid.py profile "Theodul Pass" \
+        --url https://tiles.snowdesk-data.info/terrain/v2 \
+        --expect dist/terrain/verify-gap.json
 """
 
 from __future__ import annotations
@@ -66,6 +70,8 @@ import json
 import math
 import struct
 import sys
+import urllib.request
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, NamedTuple
 
@@ -77,6 +83,9 @@ from typing import Any, NamedTuple
 # the new rules (tiles are cached immutable for a year, by URL).
 
 GRID_ID = "snowdesk-terrain-5m-3035"
+
+#: Named places verify.sh checks the published grid against (SNOW-1505).
+VERIFY_POINTS = Path(__file__).resolve().parent / "verify_points.json"
 
 #: ETRS89-LAEA. Equal-area and metric across the whole Alps, so a cell is the
 #: same size in Chamonix as in the Zillertal and a slope is a slope everywhere.
@@ -176,12 +185,39 @@ SOURCES: dict[str, dict[str, Any]] = {
         "source_url": "https://www.swisstopo.admin.ch/en/height-model-swissalti3d",
         "stac_collection": "ch.swisstopo.swissalti3d",
     },
+    # SNOW-1505: the rest of the Alps, from the national models in our copy of
+    # Mapterhorn's tiles, clipped to their own coverage so that ground only
+    # Copernicus GLO-30 covers stays absent. One entry for the mosaic, with a
+    # credit per model nested under it (cut_terrain_tiles.grid_json adds them,
+    # and the release, per build from Mapterhorn's attribution.json).
+    "mapterhorn": {
+        "id": "mapterhorn",
+        "name": "Mapterhorn national models",
+        "provider": "Mapterhorn",
+        # Not a constant: the coarsest credited model's native resolution, set
+        # per build (Trentino's 5 m today). grid_json refuses a figure at or
+        # below swissALTI3D's, because SNOW-917 breaks a tie inside a quality
+        # tier on resolution, and inside Switzerland swissALTI3D must win.
+        "native_resolution_m": None,
+        # Every model kept is airborne laser scanning; GLO-30, the one radar
+        # source, is clipped out on ingest.
+        "quality": "lidar",
+        "surface": "terrain",
+        "attribution": "© Mapterhorn",
+        "licence": "each national model's own open licence; see credits",
+        "licence_url": "https://mapterhorn.com/attribution/",
+        "source_url": "https://mapterhorn.com",
+    },
 }
 
 #: Shown wherever a sampled height or a slope derived from it is surfaced.
 #: swisstopo accept "Source: Federal Office of Topography swisstopo" or
-#: "(c) swisstopo"; the short form is what goes on a map legend.
-ATTRIBUTION = "© swisstopo"
+#: "(c) swisstopo"; the short form is what goes on a map legend. Mapterhorn's
+#: per-model credits travel in grid.json's ``credits[]``; this is the legend.
+ATTRIBUTION = "© swisstopo, Mapterhorn"
+
+#: The attribution of a build that took swissALTI3D alone, as v1 did.
+SWISS_ONLY_ATTRIBUTION = "© swisstopo"
 
 
 class Cell(NamedTuple):
@@ -418,6 +454,153 @@ def lonlat_extent(
     return min(eastings), min(northings), max(eastings), max(northings)
 
 
+# --- Seam profiles (SNOW-1505) ----------------------------------------------
+#
+# verify.sh samples a line across the border wherever swissALTI3D meets a
+# national model, and asks two things of it: that every cell a source covers
+# has a height, and that the two sources agree where they meet. "Agree" is a
+# seam step: each side's 50 m nearest the seam is fitted with a straight line,
+# both lines are projected to the seam, and the step is the difference. A
+# straight fit rather than the two nearest cells, because a slope that carries
+# on across the border would otherwise read as a step one cell's rise high.
+
+#: Profile defaults: a 2 km line, sampled every 5 m — the cell size.
+PROFILE_LENGTH_M = 2000.0
+PROFILE_STEP_M = 5.0
+SEAM_FIT_M = 50.0
+
+#: Samples within this distance of the seam are not held to either side's
+#: expectation: the seam is located to a sample, not to the metre.
+SEAM_SLACK_M = 5.0
+
+
+def profile_points(
+    lon: float,
+    lat: float,
+    bearing_deg: float,
+    length_m: float = PROFILE_LENGTH_M,
+    step_m: float = PROFILE_STEP_M,
+) -> list[tuple[float, float, float]]:
+    """Return (distance, lon, lat) samples along a line centred on a point.
+
+    Distances run from ``-length_m / 2`` to ``+length_m / 2`` along the bearing
+    (degrees clockwise from north), so a bearing pointing out of Switzerland
+    puts the Swiss side at negative distances. Offsets use the GRS80 radii of
+    curvature at the centre — over a kilometre the error is millimetres.
+    """
+    a = 6378137.0
+    f = 1 / 298.257222101
+    e2 = f * (2 - f)
+    phi = math.radians(lat)
+    w = math.sqrt(1 - e2 * math.sin(phi) ** 2)
+    meridian = a * (1 - e2) / w**3
+    normal = a / w
+    bearing = math.radians(bearing_deg)
+    count = round(length_m / step_m)
+    samples = []
+    for index in range(count + 1):
+        distance = -length_m / 2 + index * step_m
+        north = distance * math.cos(bearing)
+        east = distance * math.sin(bearing)
+        samples.append(
+            (
+                distance,
+                lon + math.degrees(east / (normal * math.cos(phi))),
+                lat + math.degrees(north / meridian),
+            )
+        )
+    return samples
+
+
+def linear_fit(xs: list[float], ys: list[float]) -> tuple[float, float]:
+    """Return the least-squares (slope, intercept) of ys on xs."""
+    if len(xs) < 2:
+        raise ValueError("a line needs at least two points")
+    mean_x = sum(xs) / len(xs)
+    mean_y = sum(ys) / len(ys)
+    sxx = sum((x - mean_x) ** 2 for x in xs)
+    if sxx == 0:
+        raise ValueError("every point is at the same distance")
+    slope = sum((x - mean_x) * (y - mean_y) for x, y in zip(xs, ys, strict=True)) / sxx
+    return slope, mean_y - slope * mean_x
+
+
+def seam_step(
+    distances: list[float],
+    heights: list[float | None],
+    seam_m: float,
+    fit_m: float = SEAM_FIT_M,
+) -> float:
+    """Return the step between the heights the two sides predict at the seam.
+
+    The near side is ``[seam - fit_m, seam)``, the far side
+    ``(seam, seam + fit_m]``; samples without a height are left out, and a side
+    with fewer than two heights is an error rather than a step of zero.
+    """
+    sides: list[tuple[list[float], list[float]]] = [([], []), ([], [])]
+    for distance, height in zip(distances, heights, strict=True):
+        if height is None:
+            continue
+        if seam_m - fit_m <= distance < seam_m:
+            sides[0][0].append(distance)
+            sides[0][1].append(height)
+        elif seam_m < distance <= seam_m + fit_m:
+            sides[1][0].append(distance)
+            sides[1][1].append(height)
+    predictions = []
+    for label, (xs, ys) in zip(("near", "far"), sides, strict=True):
+        if len(xs) < 2:
+            raise ValueError(
+                f"the {label} side has {len(xs)} heights within {fit_m:g} m of "
+                "the seam; a step needs a fit on both sides"
+            )
+        slope, intercept = linear_fit(xs, ys)
+        predictions.append(slope * seam_m + intercept)
+    return abs(predictions[0] - predictions[1])
+
+
+def assess_profile(
+    distances: list[float],
+    heights: list[float | None],
+    expect: dict[str, Any],
+    max_step_m: float,
+) -> tuple[list[str], float | None]:
+    """Return a profile's failures, and its seam step where one was measured.
+
+    ``expect`` is the profile's entry in verify-gap.json: where the seam is,
+    which stretches a national model covers, and whether the foreign side is
+    covered at all. Swiss-side samples must all have heights; covered foreign
+    samples must too; an uncovered foreign side must have none — the 204 that
+    says no national model is there. The step is measured only where both
+    sides are covered.
+    """
+    seam = float(expect["seam_m"])
+    covered = expect.get("covered", [])
+    foreign_covered = bool(expect.get("foreign_covered"))
+    failures = []
+    for distance, height in zip(distances, heights, strict=True):
+        if distance < seam - SEAM_SLACK_M and height is None:
+            failures.append(f"no height on the Swiss side at {distance:g} m")
+        elif distance > seam + SEAM_SLACK_M:
+            inside = any(low <= distance <= high for low, high in covered)
+            if inside and height is None:
+                failures.append(f"no height inside coverage at {distance:g} m")
+            elif not foreign_covered and height is not None:
+                failures.append(
+                    f"a height ({height:g} m) at {distance:g} m, where no "
+                    "national model covers the foreign side"
+                )
+    if not foreign_covered:
+        return failures, None
+    try:
+        step = seam_step(distances, heights, seam)
+    except ValueError as error:
+        return [*failures, str(error)], None
+    if step > max_step_m:
+        failures.append(f"seam step {step:.2f} m exceeds {max_step_m:g} m")
+    return failures, step
+
+
 # --- The published definition -----------------------------------------------
 
 
@@ -514,6 +697,94 @@ def _cmd_read_cell(args: argparse.Namespace) -> int:
     return 0
 
 
+def _load_profiles(path: Path) -> list[dict[str, Any]]:
+    """Return the seam profiles listed in verify_points.json."""
+    document = json.loads(path.read_text(encoding="utf-8"))
+    profiles: list[dict[str, Any]] = document["profiles"]
+    return profiles
+
+
+def _profile_samples(profile: dict[str, Any]) -> list[tuple[float, float, float]]:
+    """Return one listed profile's (distance, lon, lat) samples."""
+    return profile_points(
+        float(profile["lon"]),
+        float(profile["lat"]),
+        float(profile["bearing_deg"]),
+        float(profile.get("length_m", PROFILE_LENGTH_M)),
+        float(profile.get("step_m", PROFILE_STEP_M)),
+    )
+
+
+def _cmd_profile_points(args: argparse.Namespace) -> int:
+    # Tab after the name, which has spaces in it; the rest space separated, the
+    # grid coordinates last so `cut -f2 | awk '{print $4, $5}'` feeds
+    # gdallocationinfo.
+    for profile in _load_profiles(args.points):
+        for distance, lon, lat in _profile_samples(profile):
+            easting, northing = lonlat_to_grid(lon, lat)
+            print(
+                f"{profile['name']}\t{distance:g} {lon:.7f} {lat:.7f} "
+                f"{easting:.2f} {northing:.2f}"
+            )
+    return 0
+
+
+def fetch_tile(url: str) -> bytes | None:
+    """Return a terrain tile's body, or None for the 204 that means no source."""
+    if not url.startswith(("http://", "https://")):
+        raise ValueError(f"refusing to fetch non-HTTP url: {url}")
+    request = urllib.request.Request(  # noqa: S310 - scheme checked above
+        url, headers={"User-Agent": "snowdesk-tiles"}
+    )
+    with urllib.request.urlopen(request, timeout=60) as response:  # noqa: S310 - checked
+        if response.status == 204:
+            return None
+        body: bytes = response.read()
+    return body
+
+
+def sample_heights(
+    url: str,
+    points: list[tuple[float, float]],
+    fetch: Callable[[str], bytes | None] = fetch_tile,
+) -> list[float | None]:
+    """Return the published height at each (lon, lat), None where there is none."""
+    tiles: dict[tuple[int, int], bytes | None] = {}
+    heights: list[float | None] = []
+    for lon, lat in points:
+        cell = cell_for(*lonlat_to_grid(lon, lat))
+        key = (cell.tile_x, cell.tile_y)
+        if key not in tiles:
+            tiles[key] = fetch(f"{url.rstrip('/')}/{cell.tile_x}/{cell.tile_y}.s16")
+        body = tiles[key]
+        heights.append(None if body is None else read_cell(body, cell.row, cell.col))
+    return heights
+
+
+def _cmd_profile(args: argparse.Namespace) -> int:
+    profiles = {p["name"]: p for p in _load_profiles(args.points)}
+    profile = profiles[args.name]
+    expectations = json.loads(args.expect.read_text(encoding="utf-8"))
+    expect = expectations["profiles"][args.name]
+    samples = _profile_samples(profile)
+    distances = [sample[0] for sample in samples]
+    heights = sample_heights(args.url, [(s[1], s[2]) for s in samples])
+    failures, step = assess_profile(
+        distances, heights, expect, float(profile.get("max_step_m", 3.0))
+    )
+    for failure in failures[:10]:
+        print(f"FAIL {failure}")
+    if len(failures) > 10:
+        print(f"FAIL ... and {len(failures) - 10} more")
+    if failures:
+        return 1
+    if step is None:
+        print("ok no national model on the foreign side; it reads no height")
+    else:
+        print(f"ok seam step {step:.2f} m")
+    return 0
+
+
 def _cmd_gdal_args(args: argparse.Namespace) -> int:
     # Emitted rather than written into build-terrain.sh so the encoding cannot
     # drift from the encoding this module documents and the tests pin.
@@ -560,6 +831,21 @@ def main(argv: list[str] | None = None) -> int:
     p_read.add_argument("row", type=int)
     p_read.add_argument("col", type=int)
     p_read.set_defaults(func=_cmd_read_cell)
+
+    p_points = sub.add_parser(
+        "profile-points", help="every seam profile's samples, for the build"
+    )
+    p_points.add_argument("--points", type=Path, default=VERIFY_POINTS)
+    p_points.set_defaults(func=_cmd_profile_points)
+
+    p_profile = sub.add_parser("profile", help="check one seam profile")
+    p_profile.add_argument("name", help="a profile name in verify_points.json")
+    p_profile.add_argument("--url", required=True, help="terrain/<version> base URL")
+    p_profile.add_argument(
+        "--expect", type=Path, required=True, help="the build's verify-gap.json"
+    )
+    p_profile.add_argument("--points", type=Path, default=VERIFY_POINTS)
+    p_profile.set_defaults(func=_cmd_profile)
 
     p_gdal = sub.add_parser("gdal-args", help="values the GDAL steps need")
     p_gdal.add_argument("what", choices=["dstnodata", "scale", "cell-size"])

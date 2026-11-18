@@ -1,11 +1,24 @@
 #!/usr/bin/env bash
-# Build the terrain elevation tileset from swissALTI3D (SNOW-908).
+# Build the terrain elevation tileset (SNOW-908; beyond Switzerland, SNOW-1505).
 #
 # Fetch swissALTI3D -> reproject to EPSG:3035 -> resample to 5 m -> quantise to
 # Int16 -> cut skirted tiles into dist/terrain/. Then ./scripts/upload.sh.
 #
+# Outside Switzerland the grid is filled from our elevation copy (dem/<version>/
+# on TILES_ORIGIN, SNOW-1444): its z14 Terrarium tiles over the supported area
+# inside TERRAIN_MAPTERHORN_BBOX are decoded, warped onto the same grid and
+# clipped to the coverage polygons of the national models Mapterhorn holds, so
+# ground only Copernicus GLO-30 covers stays absent (204). swissALTI3D is warped
+# exactly as before and composited last, so every Swiss height is unchanged.
+# Before anything is downloaded in bulk, datum_check.py compares heights across
+# four border crossings and stops the build on a step over a metre.
+#
 #     ./scripts/build-terrain.sh
 #     TERRAIN_BBOX="7.70 45.98 7.80 46.05" ./scripts/build-terrain.sh   # smoke test
+#
+# TERRAIN_MAPTERHORN_BBOX empty builds swissALTI3D alone, by exactly v1's path:
+#
+#     TERRAIN_MAPTERHORN_BBOX= TERRAIN_VERSION=v1 ./scripts/build-terrain.sh
 #
 # This is offline, one-off and slow. Terrain does not move on human timescales,
 # so unlike the basemap in this repo there is no schedule and no refresh
@@ -20,10 +33,12 @@
 # because they are a contract with the Django side (SNOW-917), not a tunable.
 # What is configurable is which ground to cover and where to work.
 #
-# Requires GDAL (gdalbuildvrt, gdalwarp, gdal_translate) and Python 3.12+.
+# Requires GDAL (gdalbuildvrt, gdalwarp, gdal_translate; and gdallocationinfo,
+# plus ogr2ogr for a GeoPackage coverage file, for the Mapterhorn fill) and
+# Python 3.12+, with numpy and Pillow for the Mapterhorn fill.
 #
-#     Debian/Ubuntu:  sudo apt-get install -y gdal-bin python3
-#     macOS:          brew install gdal
+#     Debian/Ubuntu:  sudo apt-get install -y gdal-bin python3 python3-numpy python3-pil
+#     macOS:          brew install gdal && pip install '.[build]'
 #
 # Sizing, measured over all of Switzerland on 2026-09-13: 43,650 source GeoTIFFs
 # at about 1 MB each (~44 GB), a warped intermediate and a 7.1 GB flat grid —
@@ -32,6 +47,11 @@
 # vCPU — the warp is the longest single stage, and the download is the only one
 # that scales with the number of source squares rather than with area. A 66 km2
 # box around Zermatt runs end to end in 22 seconds.
+#
+# With the Mapterhorn fill over the Alps (estimated, not yet measured): a grid
+# of ~184,576 x 103,936 cells, ~38 GB as flat Int16, beside the decoded z14
+# blocks (4 bytes a pixel), the Mapterhorn and merged Float32 rasters and the
+# tiles — peak intermediates of roughly 300-350 GB. Budget 400 GB free.
 # Every stage is skipped if its output is already there, so an interrupted run
 # resumes; FORCE_TERRAIN=1 redoes the GDAL stages.
 #
@@ -59,12 +79,32 @@ EOF
     exit 1
 fi
 
-for tool in gdalbuildvrt gdalwarp gdal_translate; do
+# Empty TERRAIN_MAPTERHORN_BBOX is the swissALTI3D-only build, v1's exact path.
+if [ -n "${TERRAIN_MAPTERHORN_BBOX:-}" ]; then
+    mapterhorn=1
+else
+    mapterhorn=0
+fi
+
+tools="gdalbuildvrt gdalwarp gdal_translate"
+[ "$mapterhorn" = 1 ] && tools="$tools gdallocationinfo curl"
+for tool in $tools; do
     command -v "$tool" >/dev/null 2>&1 || {
         echo "error: ${tool} not found — install GDAL (apt install gdal-bin, brew install gdal)" >&2
         exit 1
     }
 done
+if [ "$mapterhorn" = 1 ] && ! "$python" -c 'import numpy, PIL' 2>/dev/null; then
+    cat >&2 <<EOF
+error: ${python} cannot import numpy and Pillow, which the Mapterhorn fill needs
+
+    sudo apt-get install -y python3-numpy python3-pil     # Debian/Ubuntu
+    pip install '.[build]'                                # anywhere else
+
+or build swissALTI3D alone with TERRAIN_MAPTERHORN_BBOX= (empty).
+EOF
+    exit 1
+fi
 
 work=$TERRAIN_WORK_DIR
 tif_dir="${work}/tif"
@@ -75,19 +115,101 @@ warped="${work}/warped.tif"
 raw="${work}/grid.raw"
 out="${DIST_DIR}/${TERRAIN_DIR}"
 
+# The Mapterhorn fill's working files. The swissALTI3D fetch manifest is kept
+# apart from manifest.json, which becomes the widened one every later stage
+# (and build-terrain-class.sh) reads the extent from; swissALTI3D's published
+# coverage still comes from its own extent.
+# Keyed by the elevation copy's version, so a rerun against another copy never
+# decodes tiles fetched from the old one under the new copy's provenance.
+m_dir="${work}/mapterhorn/${TERRAIN_DEM_VERSION}"
+dem_url="${TILES_ORIGIN}/${DEM_DIR}/${TERRAIN_DEM_VERSION}"
+if [ "$mapterhorn" = 1 ]; then
+    swiss_manifest="${work}/swissalti3d-manifest.json"
+else
+    swiss_manifest=$manifest
+fi
+mapterhorn_tif="${work}/mapterhorn.tif"
+merged="${work}/merged.tif"
+
 mkdir -p "$tif_dir" "$out"
+[ "$mapterhorn" = 1 ] && mkdir -p "$m_dir"
 
 # Not fatal — a single region needs a fraction of this, and the check cannot
 # know which you are building. Wrong is better said early than at 90%.
 free_gb=$(df -Pk "$work" | awk 'NR==2 {print int($4 / 1048576)}')
-if [ "${free_gb:-0}" -lt 80 ]; then
+if [ "$mapterhorn" = 1 ] && [ "${free_gb:-0}" -lt 350 ]; then
+    echo "warning: ${free_gb} GB free; the Alps-wide grid needs ~300-350 GB of" >&2
+    echo "         intermediates and tiles, so budget 400 GB" >&2
+elif [ "${free_gb:-0}" -lt 80 ]; then
     echo "warning: ${free_gb} GB free; all of Switzerland needs ~60 GB of" >&2
     echo "         intermediates and tiles, so budget 100 GB" >&2
 fi
 
+# --- 0. Mapterhorn: copy, coverage, credits and the datum stop ----------------
+#
+# All of it before the bulk download, so a copy cut too shallow, a source with
+# no credit, or a model on a different height reference stops the build while
+# it has cost minutes rather than hours. There is no flag to skip any of it.
+
+if [ "$mapterhorn" = 1 ]; then
+    echo "==> elevation copy ${dem_url}"
+    curl -fsS "${dem_url}/manifest.json" -o "${m_dir}/dem-manifest.json"
+    "$python" scripts/mapterhorn_sources.py dem-zoom "${m_dir}/dem-manifest.json"
+
+    echo "==> Mapterhorn attribution and coverage"
+    curl -fsS "$TERRAIN_MAPTERHORN_ATTRIBUTION" -o "${m_dir}/attribution.json"
+    coverage=$TERRAIN_MAPTERHORN_COVERAGE
+    case $coverage in
+        http://* | https://*)
+            fetched="${m_dir}/$(basename "${coverage%%\?*}")"
+            [ -s "$fetched" ] || curl -fsS "$coverage" -o "$fetched"
+            coverage=$fetched
+            ;;
+    esac
+    if [ ! -s "$coverage" ]; then
+        cat >&2 <<EOF
+error: no Mapterhorn coverage file at ${coverage}
+
+Find what Mapterhorn publishes beside attribution.json with
+
+    python3 scripts/mapterhorn_sources.py probe
+
+and point TERRAIN_MAPTERHORN_COVERAGE at it (a path or a URL).
+EOF
+        exit 1
+    fi
+    case $coverage in
+        *.gpkg)
+            command -v ogr2ogr >/dev/null 2>&1 || {
+                echo "error: ogr2ogr not found — install GDAL to read ${coverage}" >&2
+                exit 1
+            }
+            coverage_json="${m_dir}/coverage.geojson"
+            ogr2ogr -f GeoJSON -t_srs EPSG:4326 -overwrite "$coverage_json" "$coverage"
+            ;;
+        *) coverage_json=$coverage ;;
+    esac
+
+    # shellcheck disable=SC2086 - TERRAIN_MAPTERHORN_BBOX is four numbers
+    "$python" scripts/mapterhorn_sources.py select \
+        --coverage "$coverage_json" \
+        --attribution "${m_dir}/attribution.json" \
+        --area "$DEM_AREA" \
+        --bbox $TERRAIN_MAPTERHORN_BBOX \
+        --clip "${m_dir}/clip.geojson" \
+        --credits "${m_dir}/credits.json"
+
+    echo "==> datum check at the border crossings"
+    "$python" scripts/datum_check.py \
+        --work "${work}/datum/${TERRAIN_DEM_VERSION}" \
+        --dem-url "$dem_url" \
+        --clip "${m_dir}/clip.geojson" \
+        --gsd "$TERRAIN_GSD"
+fi
+
 # --- 1. Which squares --------------------------------------------------------
 
-if [ -s "$urls" ] && [ -s "$manifest" ]; then
+if [ -s "$urls" ] && [ -s "$swiss_manifest" ]; then
     echo "==> ${urls} already listed ($(wc -l <"$urls" | tr -d ' ') squares)"
 else
     echo "==> listing swissALTI3D squares over ${TERRAIN_BBOX}"
@@ -96,7 +218,7 @@ else
         --bbox $TERRAIN_BBOX \
         --gsd "$TERRAIN_GSD" \
         --urls "$urls" \
-        --manifest "$manifest"
+        --manifest "$swiss_manifest"
 fi
 
 # --- 2. Download -------------------------------------------------------------
@@ -131,6 +253,71 @@ if [ "$have" -ne "$want" ]; then
     exit 1
 fi
 
+# --- 2b. Mapterhorn: fetch and decode the z14 tiles ---------------------------
+#
+# The same resumable pattern as the GeoTIFFs. Our origin answers 204 for a tile
+# outside the copy; that is kept as an empty file, which the decode reads as no
+# data and a rerun does not fetch again.
+
+if [ "$mapterhorn" = 1 ]; then
+    tile_list="${m_dir}/tiles.txt"
+    if [ ! -s "$tile_list" ]; then
+        # shellcheck disable=SC2086 - four numbers
+        "$python" scripts/terrarium.py list "$DEM_AREA" --zoom 14 \
+            --bbox $TERRAIN_MAPTERHORN_BBOX >"${tile_list}.part"
+        mv "${tile_list}.part" "$tile_list"
+    fi
+    want_tiles=$(wc -l <"$tile_list" | tr -d ' ')
+    echo "==> fetching ${want_tiles} z14 tiles from ${dem_url}"
+    export TERRAIN_DEM_URL="$dem_url" TERRAIN_WEBP_DIR="${m_dir}/webp"
+    fetch_tile() {
+        local zxy=$1 dest
+        dest="${TERRAIN_WEBP_DIR}/${zxy}.webp"
+        [ -e "$dest" ] && return 0
+        mkdir -p "$(dirname "$dest")"
+        curl -fsS --retry 3 --retry-delay 2 -o "${dest}.part" "${TERRAIN_DEM_URL}/${zxy}.webp" || {
+            echo "error: failed ${TERRAIN_DEM_URL}/${zxy}.webp" >&2
+            return 1
+        }
+        # A 204 writes nothing; make the empty file so the rerun skips it.
+        [ -e "${dest}.part" ] || : >"${dest}.part"
+        mv "${dest}.part" "$dest"
+    }
+    export -f fetch_tile
+    xargs -P "$TERRAIN_JOBS" -I{} bash -c 'fetch_tile "$@"' _ {} <"$tile_list" || true
+
+    have_tiles=$(find "${m_dir}/webp" -name '*.webp' | wc -l | tr -d ' ')
+    if [ "$have_tiles" -ne "$want_tiles" ]; then
+        echo "error: ${have_tiles} of ${want_tiles} z14 tiles fetched — rerun to resume" >&2
+        exit 1
+    fi
+
+    mosaic="${m_dir}/blocks/mosaic.vrt"
+    if [ -s "$mosaic" ] && [ "${FORCE_TERRAIN:-0}" != "1" ]; then
+        echo "==> ${mosaic} exists — skipping decode; FORCE_TERRAIN=1 to redo"
+    else
+        echo "==> decoding Terrarium into Float32 blocks"
+        "$python" scripts/terrarium.py decode \
+            --tiles "$tile_list" \
+            --tile-dir "${m_dir}/webp" \
+            --out "${m_dir}/blocks"
+    fi
+
+    # The grid's extent is read from manifest.json, so widening it here is what
+    # puts the rest of the Alps on the grid. Rewritten every run: it is cheap,
+    # and a stale one would warp the wrong extent.
+    echo "==> widening ${manifest} to the Mapterhorn area"
+    # shellcheck disable=SC2086 - four numbers
+    "$python" scripts/mapterhorn_sources.py manifest \
+        --swiss "$swiss_manifest" \
+        --area "$DEM_AREA" \
+        --bbox $TERRAIN_MAPTERHORN_BBOX \
+        --credits "${m_dir}/credits.json" \
+        --dem-manifest "${m_dir}/dem-manifest.json" \
+        --dem-version "$TERRAIN_DEM_VERSION" >"${manifest}.part"
+    mv "${manifest}.part" "$manifest"
+fi
+
 # --- 3. Reproject and resample -----------------------------------------------
 
 if [ ! -s "$vrt" ] || [ "$urls" -nt "$vrt" ]; then
@@ -153,7 +340,14 @@ cols=$(( (te_e - te_w) / cell ))
 rows=$(( (te_n - te_s) / cell ))
 echo "==> grid ${cols}x${rows} cells, ${tiles_x}x${tiles_y} tiles from (${tile_x}, ${tile_y})"
 
-if [ -s "$warped" ] && [ "${FORCE_TERRAIN:-0}" != "1" ]; then
+# A raster is reused only if it was made over this extent: a warped.tif left by
+# a Swiss-only run is a different shape from the one an Alps-wide run needs.
+stamp="${te_w} ${te_s} ${te_e} ${te_n}"
+current() { [ -s "$1" ] && [ "$(cat "${1}.extent" 2>/dev/null)" = "${2:-$stamp}" ] && [ "${FORCE_TERRAIN:-0}" != "1" ]; }
+# The Mapterhorn rasters also depend on which elevation copy filled them.
+m_stamp="${stamp} dem=${TERRAIN_DEM_VERSION}"
+
+if current "$warped"; then
     echo "==> ${warped} exists — skipping warp; FORCE_TERRAIN=1 to redo"
 else
     echo "==> warping to EPSG:3035 at ${cell} m (this is the slow part)"
@@ -180,11 +374,51 @@ else
         -co TILED=YES -co COMPRESS=DEFLATE -co BIGTIFF=YES \
         -overwrite \
         "$vrt" "$warped"
+    echo "$stamp" >"${warped}.extent"
+fi
+
+# --- 3b. Mapterhorn: warp, clip and composite --------------------------------
+
+grid_source=$warped
+if [ "$mapterhorn" = 1 ]; then
+    if current "$mapterhorn_tif" "$m_stamp"; then
+        echo "==> ${mapterhorn_tif} exists — skipping warp; FORCE_TERRAIN=1 to redo"
+    else
+        echo "==> warping the Mapterhorn fill to EPSG:3035 at ${cell} m"
+        # The same -te, -tr, resample and no-data as the swissALTI3D warp, so the
+        # two land on identical cells. -cutline is the union of the national
+        # models' coverage polygons, used as published: GLO-30-only ground is
+        # cut away and stays no data.
+        gdalwarp \
+            -t_srs EPSG:3035 \
+            -te "$te_w" "$te_s" "$te_e" "$te_n" \
+            -tr "$cell" "$cell" \
+            -r average \
+            -ot Float32 \
+            -dstnodata "$dstnodata" \
+            -cutline "${m_dir}/clip.geojson" \
+            -multi -wo NUM_THREADS=ALL_CPUS \
+            -co TILED=YES -co COMPRESS=DEFLATE -co BIGTIFF=YES \
+            -overwrite \
+            "$mosaic" "$mapterhorn_tif"
+        echo "$m_stamp" >"${mapterhorn_tif}.extent"
+    fi
+
+    if current "$merged" "$m_stamp" && [ "$merged" -nt "$warped" ] && [ "$merged" -nt "$mapterhorn_tif" ]; then
+        echo "==> ${merged} exists — skipping composite; FORCE_TERRAIN=1 to redo"
+    else
+        echo "==> compositing: Mapterhorn first, swissALTI3D last"
+        ./scripts/composite-terrain.sh "$mapterhorn_tif" "$warped" "$merged" \
+            "$te_w" "$te_s" "$te_e" "$te_n"
+        echo "$m_stamp" >"${merged}.extent"
+    fi
+    grid_source=$merged
 fi
 
 # --- 4. Quantise to the stored Int16 scale -----------------------------------
 
-if [ -s "$raw" ] && [ "${FORCE_TERRAIN:-0}" != "1" ]; then
+if current "$raw" && [ "$(cat "${raw}.source" 2>/dev/null)" = "$grid_source" ] \
+    && [ "$raw" -nt "$grid_source" ]; then
     echo "==> ${raw} exists — skipping quantise; FORCE_TERRAIN=1 to redo"
 else
     echo "==> quantising [${s_min}, ${s_max}] m onto Int16 [${d_min}, ${d_max}]"
@@ -206,7 +440,9 @@ else
         -ot Int16 \
         -scale "$s_min" "$s_max" "$d_min" "$d_max" \
         -a_nodata "$d_min" \
-        "$warped" "$raw"
+        "$grid_source" "$raw"
+    echo "$stamp" >"${raw}.extent"
+    echo "$grid_source" >"${raw}.source"
 fi
 
 # ENVI writes in the host's byte order. Every machine anyone will run this on is
@@ -230,6 +466,29 @@ fi
     --origin "$TILES_ORIGIN" \
     --version "$TERRAIN_VERSION" \
     --manifest "$manifest"
+
+# --- 6. Mapterhorn: what verify.sh should find --------------------------------
+#
+# Coverage-derived expectations, written beside the tiles for verify.sh: a gap
+# probe (inside the supported area, outside every national model: 204) and, for
+# each seam profile, where swissALTI3D stops along it — read off the Swiss warp
+# itself — and which stretch a national model covers. upload.sh leaves it out of
+# the bucket; it is an input to the checks, not a published object.
+
+if [ "$mapterhorn" = 1 ]; then
+    "$python" scripts/terrain_grid.py profile-points >"${m_dir}/profile-points.txt"
+    cut -f2 "${m_dir}/profile-points.txt" | awk '{print $4, $5}' \
+        | gdallocationinfo -valonly -geoloc "$warped" >"${m_dir}/profile-swiss.txt"
+    # shellcheck disable=SC2086 - four numbers
+    "$python" scripts/mapterhorn_sources.py verify-gap \
+        --clip "${m_dir}/clip.geojson" \
+        --area "$DEM_AREA" \
+        --bbox $TERRAIN_MAPTERHORN_BBOX \
+        --swiss "$swiss_manifest" \
+        --profile-points "${m_dir}/profile-points.txt" \
+        --profile-swiss "${m_dir}/profile-swiss.txt" >"${out}/verify-gap.json"
+    echo "==> ${out}/verify-gap.json written for verify.sh"
+fi
 
 echo
 echo "==> ${out} ready: $(du -sh "$out" | cut -f1)"

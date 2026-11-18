@@ -54,10 +54,13 @@ from terrain_grid import (
     SKIRT_CELLS,
     SOURCES,
     STORED_CELLS,
+    SWISS_ONLY_ATTRIBUTION,
     TILE_BYTES,
     TILE_CELLS,
     TILE_SIZE_M,
     definition,
+    lonlat_extent,
+    snap_extent,
 )
 
 NODATA_CELL = struct.pack("<h", NODATA)
@@ -212,21 +215,86 @@ def cut(raster: Raster, out: Path) -> dict[str, Any]:
     }
 
 
+def source_coverage(bbox: list[float]) -> dict[str, Any]:
+    """Return a source's published coverage from its WGS84 extent.
+
+    The tile-aligned rectangle the extent projects into, as SNOW-917's
+    ``source_from_payload`` reads it: a deliberate superset of the ground, with
+    the 204 rule correcting it cell by cell. From the source's own extent and
+    never from the merged raster, which holds every source's ground at once.
+    """
+    west, south, east, north = (float(value) for value in bbox)
+    extent = snap_extent(*lonlat_extent(west, south, east, north), margin_tiles=0)
+    return {
+        "tile_x": [extent.tile_x, extent.tile_x + extent.tiles_x - 1],
+        "tile_y": [extent.tile_y, extent.tile_y + extent.tiles_y - 1],
+        "bbox": [extent.west, extent.south, extent.east, extent.north],
+    }
+
+
+def _mapterhorn_entry(meta: dict[str, Any]) -> dict[str, Any]:
+    """Return grid.json's mapterhorn entry from the widened manifest."""
+    credits = meta.get("credits") or []
+    if not credits:
+        raise ValueError("the mapterhorn source has no credits; every model needs one")
+    resolution = meta.get("native_resolution_m")
+    swiss_resolution = float(SOURCES["swissalti3d"]["native_resolution_m"])
+    # SNOW-917's select_source breaks a tie inside a quality tier on native
+    # resolution. Both entries are lidar, and Mapterhorn's rectangle covers
+    # Switzerland, so a figure at or below swissALTI3D's would hand Swiss
+    # points to the mosaic. The coarsest model's figure is the honest one.
+    if resolution is None or float(resolution) <= swiss_resolution:
+        raise ValueError(
+            f"mapterhorn native_resolution_m {resolution!r} must be coarser than "
+            f"swissALTI3D's {swiss_resolution:g} m"
+        )
+    return dict(SOURCES["mapterhorn"]) | {
+        "native_resolution_m": float(resolution),
+        "coverage": source_coverage(meta["bbox"]),
+        "release": meta.get("release"),
+        "dem_version": meta.get("dem_version"),
+        "credits": credits,
+    }
+
+
 def grid_json(
     coverage: dict[str, Any],
-    source: str,
     origin: str,
     version: str,
     manifest: dict[str, Any] | None,
 ) -> dict[str, Any]:
-    """Return the published grid definition with this build's coverage in it."""
-    if source not in SOURCES:
-        raise ValueError(f"unknown terrain source {source!r}; add it to SOURCES")
-    entry = dict(SOURCES[source]) | {"coverage": coverage}
+    """Return the published grid definition with this build's sources in it.
+
+    ``sources[]`` is swissALTI3D first, then — when the manifest records the
+    Mapterhorn fill (SNOW-1505) — one mapterhorn entry with a credit per
+    national model. ``coverage`` is what the cutter wrote, published once for
+    the whole build. Without a manifest, swissALTI3D's coverage falls back to
+    it, as v1 published.
+    """
+    sources = (manifest or {}).get("sources")
+    if sources is not None:
+        unknown = sorted(set(sources) - set(SOURCES))
+        if unknown:
+            raise ValueError(
+                f"unknown terrain source {', '.join(unknown)}; add it to SOURCES"
+            )
+
+    swiss = dict(SOURCES["swissalti3d"])
     if manifest:
-        entry["survey_years"] = manifest.get("survey_years", [])
-        entry["source_tile_count"] = manifest.get("count")
-    return definition(origin, version) | {"sources": [entry]}
+        swiss_bbox = sources["swissalti3d"]["bbox"] if sources else manifest["bbox"]
+        swiss["coverage"] = source_coverage(swiss_bbox)
+        swiss["survey_years"] = manifest.get("survey_years", [])
+        swiss["source_tile_count"] = manifest.get("count")
+    else:
+        swiss["coverage"] = coverage
+    entries = [swiss]
+
+    document = definition(origin, version)
+    if sources and "mapterhorn" in sources:
+        entries.append(_mapterhorn_entry(sources["mapterhorn"]))
+    else:
+        document["attribution"] = SWISS_ONLY_ATTRIBUTION
+    return document | {"coverage": coverage, "sources": entries}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -243,12 +311,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--origin", default="", help="public origin serving the tiles")
     parser.add_argument("--version", default="", help="tile URL version segment")
     parser.add_argument(
-        "--source",
-        default="swissalti3d",
-        choices=sorted(SOURCES),
-        help="registry entry the heights came from",
+        "--manifest", help="fetch manifest: provenance and each source's extent"
     )
-    parser.add_argument("--manifest", help="fetch manifest, for provenance")
     args = parser.parse_args(argv)
 
     raster = Raster(Path(args.raster), args.west, args.north, args.cols, args.rows)
@@ -267,7 +331,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.manifest
         else None
     )
-    document = grid_json(coverage, args.source, args.origin, args.version, manifest)
+    document = grid_json(coverage, args.origin, args.version, manifest)
     (out / "grid.json").write_text(json.dumps(document, indent=2) + "\n", "utf-8")
 
     print(

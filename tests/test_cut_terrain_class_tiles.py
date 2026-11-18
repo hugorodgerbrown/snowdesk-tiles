@@ -16,6 +16,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -296,13 +297,18 @@ def test_png_is_rgba_with_filter_zero() -> None:
     assert read_png_rgba(body) == (3, 2, [bytes(NODATA_PIXEL) * 3] * 2)
 
 
-def run_main(tmp_path: Path, zooms: list[int]) -> Path:
+def run_main(
+    tmp_path: Path, zooms: list[int], sources: dict[str, Any] | None = None
+) -> Path:
     """Build rasters for ``zooms``, run the cutter over them, return its out dir."""
     work = tmp_path / "work"
     for zoom in zooms:
         build_raster(work, zoom)
     manifest = tmp_path / "manifest.json"
-    manifest.write_text(json.dumps({"bbox": BBOX}))
+    document: dict[str, Any] = {"bbox": BBOX}
+    if sources is not None:
+        document["sources"] = sources
+    manifest.write_text(json.dumps(document))
     out = tmp_path / "terrain-class"
 
     args = ["--work", str(work), "--manifest", str(manifest), "--out", str(out)]
@@ -322,6 +328,21 @@ def test_main_writes_tiles_and_the_descriptor(tmp_path: Path) -> None:
     assert doc["bytes"] == sum(path.stat().st_size for path in pngs)
     assert [level["zoom"] for level in doc["levels"]] == [12, 13, 14]
     assert doc["encoding"]["nodata"] == 255
+
+
+def test_a_swiss_only_build_credits_swisstopo_alone(tmp_path: Path) -> None:
+    out = run_main(tmp_path, [12, 13, 14])
+
+    doc = json.loads((out / "tiles.json").read_text())
+    assert doc["attribution"] == "© swisstopo"
+
+
+def test_a_build_with_the_mapterhorn_fill_credits_both(tmp_path: Path) -> None:
+    sources = {"swissalti3d": {"bbox": BBOX}, "mapterhorn": {"bbox": BBOX}}
+    out = run_main(tmp_path, [12, 13, 14], sources)
+
+    doc = json.loads((out / "tiles.json").read_text())
+    assert doc["attribution"] == "© swisstopo, Mapterhorn"
 
 
 def test_a_partial_build_writes_no_descriptor(tmp_path: Path) -> None:

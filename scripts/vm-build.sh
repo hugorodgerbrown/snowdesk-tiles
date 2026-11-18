@@ -3,7 +3,7 @@
 # straight to R2.
 #
 #     ./snowdesk-tiles/scripts/vm-build.sh            # the vector tile archive
-#     ./snowdesk-tiles/scripts/vm-build.sh terrain    # the elevation tileset
+#     ./snowdesk-tiles/scripts/vm-build.sh terrain 2026-12   # the elevation tileset
 #     ./snowdesk-tiles/scripts/vm-build.sh terrain-class   # the class tiles
 #     ./snowdesk-tiles/scripts/vm-build.sh dem 2026-11     # the 3-D elevation copy
 #
@@ -48,14 +48,22 @@ set -euo pipefail
 
 target=${1:-basemap}
 case $target in
-    basemap | terrain | terrain-class) ;;
+    basemap | terrain-class) ;;
+    terrain)
+        # The elevation copy (dem/<version>/) the Mapterhorn fill reads its z14
+        # tiles from (SNOW-1505). Optional; config.sh's TERRAIN_DEM_VERSION
+        # otherwise.
+        if [ -n "${2:-}" ]; then
+            export TERRAIN_DEM_VERSION=$2
+        fi
+        ;;
     dem)
         # The version names the copy in its URL; build-dem.sh insists on one.
         dem_version=${2:-}
         [ -n "$dem_version" ] || { echo "usage: $0 dem <version>   e.g. 2026-11" >&2; exit 2; }
         ;;
     *)
-        echo "usage: $0 [basemap|terrain|terrain-class|dem <version>]" >&2
+        echo "usage: $0 [basemap|terrain [<dem-version>]|terrain-class|dem <version>]" >&2
         exit 2
         ;;
 esac
@@ -197,26 +205,32 @@ if command -v apt-get >/dev/null 2>&1; then
     # planetiler is a JVM; the terrain pipeline is GDAL and stdlib Python.
     case $target in
         basemap) sudo apt-get install -y -qq openjdk-21-jre-headless curl unzip ;;
-        terrain) sudo apt-get install -y -qq gdal-bin python3 curl unzip ;;
-        # numpy for the classifier, the one script in the repo that needs it.
-        terrain-class) sudo apt-get install -y -qq gdal-bin python3 python3-numpy curl unzip ;;
+        # numpy and Pillow decode the Mapterhorn fill's Terrarium tiles.
+        terrain) sudo apt-get install -y -qq gdal-bin python3 python3-numpy python3-pil curl unzip ;;
+        # numpy for the classifier; Pillow for the elevation build it may run first.
+        terrain-class) sudo apt-get install -y -qq gdal-bin python3 python3-numpy python3-pil curl unzip ;;
         dem) sudo apt-get install -y -qq python3 curl unzip ;;
     esac
     install_aws_cli
     [ "$target" = "dem" ] && install_pmtiles_cli
 else
     echo "warning: not a Debian/Ubuntu host — install the dependencies yourself" >&2
-    echo "         basemap: Java 21 + awscli v2; terrain: GDAL + Python 3.12 + awscli v2" >&2
-    echo "         terrain-class: as terrain, plus numpy"
+    echo "         basemap: Java 21 + awscli v2" >&2
+    echo "         terrain: GDAL + Python 3.12 with numpy and Pillow + awscli v2" >&2
+    echo "         terrain-class: as terrain" >&2
     echo "         dem: Python 3.12 + the pmtiles CLI + awscli v2" >&2
 fi
 
-# The first two want ~100 GB, for different reasons: 28 GB of OSM source plus
-# planetiler's working files, or 44 GB of GeoTIFFs plus a 7 GB warped raster, a
-# 7.1 GB flat grid and 3.6 GB of tiles. terrain-class wants ~25 GB more on top
-# of the terrain build it starts from.
+# The basemap wants ~100 GB: 28 GB of OSM source plus planetiler's working
+# files. Terrain reached ~60 GB for Switzerland alone; with the Mapterhorn fill
+# over the Alps (SNOW-1505) the grid is ~184,576 x 103,936 cells, ~38 GB as
+# flat Int16, and the decoded z14 blocks, the Mapterhorn and merged Float32
+# rasters and the tiles peak at an estimated 300-350 GB. terrain-class adds
+# ~125 GB of class planes and Mercator rasters on top of the terrain build it
+# starts from (estimated: five times Switzerland's ~25 GB).
 need_gb=100
-[ "$target" = "terrain-class" ] && need_gb=125
+[ "$target" = "terrain" ] && need_gb=400
+[ "$target" = "terrain-class" ] && need_gb=525
 # The elevation copy is an estimate until the first build reports it: z13-15 is
 # about 1.5% of a z18 regional archive's bytes and 6% of a z17 one's, which over
 # the seven Alpine and Pyrenean archives comes to roughly 20-40 GB.
@@ -248,8 +262,25 @@ if [ "$target" = "basemap" ]; then
 
     artefact="${PMTILES_NAME}"
 elif [ "$target" = "terrain" ]; then
-    echo "==> building the terrain tileset for ${TERRAIN_BBOX}"
+    echo "==> building the terrain tileset for ${TERRAIN_BBOX} (fill: ${TERRAIN_MAPTERHORN_BBOX:-none}, dem ${TERRAIN_DEM_VERSION})"
     ./scripts/build-terrain.sh
+
+    # Swiss heights unchanged, or no upload (SNOW-1505). 300 tiles of the live
+    # grid — 200 wholly inside swissALTI3D's coverage, 100 on its edge, picked
+    # by a fixed seed from the coverage its grid.json publishes — must hold the
+    # same Int16 in every valid cell of the new build. A difference stops here,
+    # before anything reaches the bucket. There is no flag past it.
+    reference="${TERRAIN_WORK_DIR}/reference-${TERRAIN_REFERENCE_VERSION}"
+    echo "==> comparing Swiss heights with live terrain/${TERRAIN_REFERENCE_VERSION}"
+    python3 scripts/compare_grids.py sample \
+        --url "${TILES_ORIGIN}/${TERRAIN_DIR}/${TERRAIN_REFERENCE_VERSION}" \
+        --out "$reference" \
+        --seed "$TERRAIN_COMPARE_SEED" \
+        --interior 200 --border 100
+    python3 scripts/compare_grids.py "$reference" "${DIST_DIR}/${TERRAIN_DIR}" || {
+        echo "error: the rebuild changed a Swiss height; nothing was uploaded" >&2
+        exit 1
+    }
 
     # upload.sh here, not a bespoke copy: this is tens of thousands of small
     # objects, so `sync` is doing real work — an interrupted upload resumes and
@@ -311,3 +342,16 @@ Back on your laptop:
 
 Then destroy this VM — the R2 credentials are in its environment.
 EOF
+
+# verify.sh's gap probe and seam profiles read what only the build knows. Print
+# it so it can be pasted on the laptop before the box is destroyed.
+gap_file="${DIST_DIR}/${TERRAIN_DIR}/verify-gap.json"
+if [ "$target" = "terrain" ] && [ -s "$gap_file" ]; then
+    cat <<EOF
+verify.sh needs this build's ${gap_file}. Paste on the laptop:
+
+mkdir -p ${DIST_DIR}/${TERRAIN_DIR} && cat >${gap_file} <<'JSON'
+$(cat "$gap_file")
+JSON
+EOF
+fi

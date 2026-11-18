@@ -89,7 +89,46 @@ def test_terrain_tile_path_has_no_stray_backslashes() -> None:
 
 
 def test_terrain_tile_path_carries_the_version() -> None:
-    assert config_value("TERRAIN_TILE_PATH") == "terrain/v1/{x}/{y}.s16"
+    # v2 (SNOW-1505): the grid reaches beyond Switzerland.
+    assert config_value("TERRAIN_TILE_PATH") == "terrain/v2/{x}/{y}.s16"
+
+
+def test_terrain_class_version_follows_the_new_grid() -> None:
+    # Classified from the v2 grid, so a class tile under the v2 URL would be a
+    # Swiss-only answer cached for a year.
+    assert config_value("TERRAIN_CLASS_VERSION") == "v3"
+
+
+def test_mapterhorn_bbox_defaults_to_the_alps() -> None:
+    parts = [float(part) for part in config_value("TERRAIN_MAPTERHORN_BBOX").split()]
+
+    assert parts == [5.0, 43.7, 16.6, 48.4]
+
+
+def test_an_empty_mapterhorn_bbox_stays_empty() -> None:
+    # Empty is the switch back to the swissALTI3D-only v1 build. `:=` would
+    # quietly replace it with the default and build v2 instead.
+    assert (
+        config_value("TERRAIN_MAPTERHORN_BBOX", {"TERRAIN_MAPTERHORN_BBOX": ""}) == ""
+    )
+
+
+def test_terrain_reads_a_named_dem_copy() -> None:
+    assert config_value("TERRAIN_DEM_VERSION") == "2026-12"
+    assert config_value("TERRAIN_DEM_VERSION", {"TERRAIN_DEM_VERSION": "x"}) == "x"
+
+
+def test_mapterhorn_attribution_sits_beside_the_catalogue() -> None:
+    value = config_value(
+        "TERRAIN_MAPTERHORN_ATTRIBUTION", {"DEM_SOURCE_ORIGIN": "https://m.example"}
+    )
+
+    assert value == "https://m.example/attribution.json"
+
+
+def test_swiss_comparison_reads_the_live_v1_grid() -> None:
+    assert config_value("TERRAIN_REFERENCE_VERSION") == "v1"
+    assert int(config_value("TERRAIN_COMPARE_SEED")) > 0
 
 
 def test_terrain_version_flows_into_terrain_tile_path() -> None:

@@ -32,11 +32,16 @@ entry) lives in `snowdesk-data-pipeline` under SNOW-242.
 | `scripts/build.sh` | Runs the three above to assemble `dist/`. |
 | `scripts/upload.sh` | Publishes `dist/` to R2 with per-class Content-Type and Cache-Control. |
 | `scripts/setup-bucket.sh` | One-time bucket creation. |
-| `scripts/vm-build.sh` | Builds the archive on a throwaway VM and uploads it to R2. |
+| `scripts/vm-build.sh` | Builds the archive on a throwaway VM and uploads it to R2. `terrain` compares Swiss heights with the live grid before it uploads. |
 | `scripts/terrain_grid.py` | The terrain grid's geometry and encoding. The contract with SNOW-917. |
 | `scripts/fetch_swissalti3d.py` | Lists the swissALTI3D squares over a box, from swisstopo's STAC API. |
 | `scripts/cut_terrain_tiles.py` | Cuts the warped raster into skirted Int16 tiles, and writes `grid.json`. |
-| `scripts/build-terrain.sh` | Runs the three above plus GDAL → `dist/terrain/`. One-off; needs ~100 GB. |
+| `scripts/terrarium.py` | Lists the z14 tiles of the supported area, decodes their Terrarium heights and mosaics them as an EPSG:3857 VRT. Needs numpy and Pillow. |
+| `scripts/mapterhorn_sources.py` | Picks the national models Mapterhorn holds (never GLO-30), writes the clip polygons and the credits, widens the manifest, and writes `verify-gap.json`. `probe` lists what Mapterhorn publishes. |
+| `scripts/datum_check.py` | Stops the terrain build if heights step by over 1 m across the border at the crossings in `scripts/datum_points.json`. |
+| `scripts/composite-terrain.sh` | Composites the warped Mapterhorn fill under the unchanged swissALTI3D warp. |
+| `scripts/compare_grids.py` | Fails if a rebuilt grid changed any height a reference grid holds; `sample` fetches the reference from the live grid. |
+| `scripts/build-terrain.sh` | Runs the above plus GDAL → `dist/terrain/`: swissALTI3D, and the Alps beyond from the elevation copy. One-off; needs ~400 GB. |
 | `scripts/terrain_class.py` | The terrain-class pixel contract and kernel (a copy of `sample_slope`'s). |
 | `scripts/classify_terrain.py` | Classifies `grid.raw` into three EPSG:3035 class planes. The one numpy script. |
 | `scripts/cut_terrain_class_tiles.py` | Cuts the warped class rasters into PNG tiles, and writes `tiles.json`. |
@@ -45,6 +50,7 @@ entry) lives in `snowdesk-data-pipeline` under SNOW-242.
 | `scripts/dem_archives.py` | Picks the Mapterhorn archives the area touches, writes the copy's `manifest.json`, and turns a point into a tile. |
 | `scripts/build-dem.sh` | `pmtiles extract --region` from Mapterhorn → `dist/dem/<version>/`. On a VM; ~80 GB free. |
 | `scripts/verify.sh` | Acceptance checks against the live origin. |
+| `scripts/verify_points.json` | The summits, seam profiles and absent ground `verify.sh` checks the terrain grid against outside Switzerland. |
 | `worker/` | Worker serving XYZ tiles, and the CORS allowlist (`ALLOWED_ORIGINS`). `npm test` runs its routing tests. |
 
 ## Why R2 and not an origin server
@@ -853,26 +859,32 @@ answer 204. `TERRAIN_CLASS=0 ./scripts/verify.sh` skips the section.
 
 ### Coverage, and what is honestly missing
 
-The grid is Alps-wide from day one and only the Swiss part has data in it.
-Adding a source later ([SNOW-693], Copernicus GLO-30) is "resample a coarser
-source onto the existing grid"; the grid itself never moves. A source is a
-registry entry in `terrain_grid.py` — coverage, quality tier, native resolution,
-licence, attribution — and native resolution is recorded separately from cell
-spacing because they are not the same claim. A 30 m source on a 5 m grid is
-upsampling, which is honest only so long as nothing downstream reads 5 m cells
-as 5 m of information.
+The grid is Alps-wide by definition, and the grid itself never moves. Since
+SNOW-1505 it holds two sources. swissALTI3D (2 m) fills Switzerland and
+Liechtenstein. Our Mapterhorn copy fills the rest of the supported area, read
+at z14 and clipped to the coverage of the national models it carries: BEV in
+Austria, IGN in France, the Bolzano and Trento provinces, Bavaria, and the
+others that `grid.json`'s `credits[]` lists. swissALTI3D wins every cell it
+fills, and `compare_grids.py` stops the publish if any Swiss height would
+change.
 
-The accepted limitation, stated plainly: **the display overlay covers more
-ground than the sampling grid**. In the Vanoise or the Écrins a user will see
-slope shading under an uncoloured route line. That is not a correctness bug
-while unknown never renders as gentle — and it is the strongest argument for
-GLO-30 as source number two.
+A source is a registry entry in `terrain_grid.py`: coverage, quality tier,
+native resolution, licence and attribution. Native resolution is recorded
+separately from cell spacing because they are not the same claim.
+
+The accepted limitation, stated plainly: **ground that only Copernicus GLO-30
+covers stays absent (204)**. A 30 m model smooths out short steep pitches, so it
+reads steepness too low, which is the dangerous direction. Hugo decided on
+18 Nov 2026 to hatch that ground rather than fill it. The Pyrenees and Corsica
+are outside the build box (SNOW-1532).
 
 ### Cost
 
-Storage is the only ongoing cost and it is the reason the grid can be this fine.
-3.6 GB in R2 is about five cents a month, egress is free, and the writes are
-one-off. There is no dyno, no schedule and nothing to keep alive.
+Storage is the only ongoing cost, and it is the reason the grid can be this
+fine. The Swiss-only build was 3.6 GB in R2, about five cents a month. The
+Alps-wide build is estimated at 8–12 GB more for the grid and the class tiles
+together, under twenty cents a month. Egress is free and the writes are one-off.
+There is no dyno, no schedule and nothing to keep alive.
 
 ## The 3-D elevation copy
 

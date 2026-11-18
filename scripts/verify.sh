@@ -215,6 +215,26 @@ print(json.dumps({k: doc.get(k) for k in keys}, sort_keys=True))
     got_grid=$(curl -s "${terrain_url}/grid.json" | contract)
     check "terrain grid matches scripts/terrain_grid.py" "$want_grid" "$got_grid"
 
+    # The sources (SNOW-1505): swissALTI3D first — SNOW-917 reads the order as
+    # well as the tier — and, where Mapterhorn fills the rest, one entry with
+    # a credit per national model. A mosaic published without its credits is a
+    # licence breach that renders perfectly.
+    sources_shape() {
+        python3 -c '
+import json, sys
+doc = json.load(sys.stdin)
+sources = doc.get("sources") or []
+ids = [s.get("id") for s in sources]
+first = ids[0] if ids else "<none>"
+mapterhorn = [s for s in sources if s.get("id") == "mapterhorn"]
+credits = "credits" if mapterhorn and mapterhorn[0].get("credits") else "no-credits"
+print(first, credits)
+' 2>/dev/null || echo "<unreadable> <unreadable>"
+    }
+    read -r first_source credits_state < <(curl -s "${terrain_url}/grid.json" | sources_shape)
+    check "terrain grid lists swissALTI3D first" swissalti3d "$first_source"
+    check "terrain grid credits every Mapterhorn model" credits "$credits_state"
+
     # A tile is a fixed-size array, and the size is the contract. A short body
     # decodes as garbage from the first row rather than failing, so the length
     # is worth asserting on its own.
@@ -272,13 +292,79 @@ print(json.dumps({k: doc.get(k) for k in keys}, sort_keys=True))
     elevation "Jungfraujoch (CH high)" 7.9806 46.5472 3350 3520
     elevation "Lugano (CH S)" 8.9511 46.0037 260 420
 
+    # Beyond Switzerland (SNOW-1505). Innsbruck was the 204 probe while the
+    # grid stopped at the border; it is national-model ground now, so it has a
+    # height. The summits are each agency's published height, from 15 m below
+    # (a 5 m cell averages a summit down) to 2 m above; the list, with where
+    # each number comes from, is scripts/verify_points.json.
+    elevation "Innsbruck (AT, valley)" 11.3933 47.2692 550 650
+    while IFS=$'\t' read -r name lon lat low high; do
+        elevation "$name" "$lon" "$lat" "$low" "$high"
+    done < <(python3 -c '
+import json
+doc = json.load(open("scripts/verify_points.json"))
+for s in doc["summits"]:
+    t = s["tolerance"]
+    print("\t".join([s["name"], str(s["lon"]), str(s["lat"]),
+                     str(s["height_m"] - t["below_m"]), str(s["height_m"] + t["above_m"])]))
+')
+
     # The honest-unknown path, and the one the blocked tickets depend on most.
-    # Outside swissALTI3D's coverage there is no height, and the caller has to
-    # be able to tell that from a valid one — 204, not a 404 and certainly not a
-    # zero. SNOW-839 and SNOW-910 both turn on absent never rendering as gentle.
-    read -r tx ty _ _ < <(python3 scripts/terrain_grid.py cell 11.3933 47.2692)
-    check "terrain is 204 outside coverage (Innsbruck)" 204 \
-        "$(status "${terrain_url}/${tx}/${ty}.s16")"
+    # Outside every source there is no height, and the caller has to be able to
+    # tell that from a valid one — 204, not a 404 and certainly not a zero.
+    # SNOW-839 and SNOW-910 both turn on absent never rendering as gentle.
+    while IFS=$'\t' read -r name lon lat; do
+        read -r tx ty _ _ < <(python3 scripts/terrain_grid.py cell "$lon" "$lat")
+        check "terrain is 204 outside coverage (${name})" 204 \
+            "$(status "${terrain_url}/${tx}/${ty}.s16")"
+    done < <(python3 -c '
+import json
+for p in json.load(open("scripts/verify_points.json"))["absent"]:
+    print(p["name"], p["lon"], p["lat"], sep="\t")
+')
+
+    # What only the build knows: a point inside the supported area that no
+    # national model covers (GLO-30-only ground, which the clip leaves out),
+    # and where along each seam profile a model covers. build-terrain.sh writes
+    # them to dist/terrain/verify-gap.json; on another machine, copy it there
+    # (vm-build.sh prints it) or point TERRAIN_VERIFY_GAP at it.
+    gap_file=${TERRAIN_VERIFY_GAP:-${DIST_DIR}/${TERRAIN_DIR}/verify-gap.json}
+    if [ ! -s "$gap_file" ]; then
+        printf '  FAIL  terrain: no %s — the gap probe and seam profiles need it\n' "$gap_file"
+        failures=$((failures + 1))
+    else
+        gap=$(python3 -c '
+import json, sys
+gap = json.load(open(sys.argv[1])).get("gap")
+print("" if gap is None else "\t".join([gap["name"], str(gap["lon"]), str(gap["lat"])]))
+' "$gap_file")
+        if [ -z "$gap" ]; then
+            echo "  skip  terrain: gap probe (every supported-area cell has a national model)"
+        else
+            IFS=$'\t' read -r name lon lat <<<"$gap"
+            read -r tx ty _ _ < <(python3 scripts/terrain_grid.py cell "$lon" "$lat")
+            check "terrain is 204 where no national model covers (${name})" 204 \
+                "$(status "${terrain_url}/${tx}/${ty}.s16")"
+        fi
+
+        # A 2 km line across the border at 5 m: every covered cell has a height,
+        # and the two sources agree at the seam within 3 m. If the foreign side
+        # has no national model, it must read no height at all.
+        while IFS= read -r name; do
+            if result=$(python3 scripts/terrain_grid.py profile "$name" \
+                --url "$terrain_url" --expect "$gap_file" 2>&1); then
+                printf '  ok    terrain: seam %s (%s)\n' "$name" "${result#ok }"
+            else
+                printf '  FAIL  terrain: seam %s\n' "$name"
+                printf '%s\n' "$result" | sed 's/^/          /'
+                failures=$((failures + 1))
+            fi
+        done < <(python3 -c '
+import json
+for p in json.load(open("scripts/verify_points.json"))["profiles"]:
+    print(p["name"])
+')
+    fi
 
     # A negative index is a caller's arithmetic bug, not missing coverage, and
     # the Worker's route says so. 204 here would let a sign error downstream
@@ -373,11 +459,13 @@ print(json.dumps({k: doc.get(k) for k in ["minzoom", "maxzoom", "tile_size",
     classified "Lake Geneva surface" 6.5983 46.4436
     classified "Zermatt village" 7.7491 46.0207
     classified "Eiger north face" 8.0050 46.5830
+    # Beyond Switzerland since v3 (SNOW-1505); Innsbruck was the 204 probe.
+    classified "Innsbruck (AT)" 11.3933 47.2692
 
     # Outside coverage, and outside the zoom range: both 204, the cacheable
     # "nothing here", never a 404 and never a pixel.
-    read -r z x y _ _ < <(python3 scripts/terrain_class.py locate 11.3933 47.2692 14)
-    check "terrain-class is 204 outside coverage (Innsbruck)" 204 \
+    read -r z x y _ _ < <(python3 scripts/terrain_class.py locate 4.835 45.764 14)
+    check "terrain-class is 204 outside coverage (Lyon)" 204 \
         "$(status "${class_url}/${z}/${x}/${y}.png")"
     read -r z x y _ _ < <(python3 scripts/terrain_class.py locate 7.7491 46.0207 11)
     check "terrain-class is 204 below z12 (Zermatt z11)" 204 \

@@ -15,6 +15,7 @@ import math
 import struct
 import sys
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -33,7 +34,10 @@ from terrain_grid import (  # noqa: E402
     cell_for,
     decode_height,
     encode_height,
+    lonlat_extent,
+    lonlat_to_grid,
     read_cell,
+    snap_extent,
 )
 
 # Three tile columns by two tile rows, with the easternmost column left empty.
@@ -249,10 +253,9 @@ def test_an_extent_with_no_data_at_all_is_an_error(tmp_path: Path) -> None:
 def test_grid_json_carries_the_source_and_its_coverage() -> None:
     doc = grid_json(
         {"tile_count": 4, "tile_x": [0, 1], "tile_y": [0, 1], "bbox": [0, 0, 1, 1]},
-        "swissalti3d",
         "https://tiles.snowdesk-data.info",
         "v1",
-        {"survey_years": [2019], "count": 42000},
+        {"survey_years": [2019], "count": 42000, "bbox": SWISS_BBOX},
     )
     source = doc["sources"][0]
 
@@ -263,8 +266,11 @@ def test_grid_json_carries_the_source_and_its_coverage() -> None:
     # while nothing downstream reads 5 m cells as 5 m of detail.
     assert source["native_resolution_m"] == 2.0
     assert source["attribution"] == "© swisstopo"
-    assert source["coverage"]["tile_count"] == 4
+    assert doc["coverage"]["tile_count"] == 4
     assert source["survey_years"] == [2019]
+    # A swissALTI3D-only build credits swisstopo alone, as v1 did.
+    assert doc["attribution"] == "© swisstopo"
+    assert [s["id"] for s in doc["sources"]] == ["swissalti3d"]
     assert json.dumps(doc)  # serialisable, since it is published as-is
 
 
@@ -272,4 +278,138 @@ def test_an_unregistered_source_is_refused() -> None:
     # Adding a source means adding its licence, its attribution and its native
     # resolution, not just pointing the build at different files.
     with pytest.raises(ValueError, match="unknown terrain source"):
-        grid_json({"tile_count": 1}, "glo30", "", "", None)
+        grid_json(
+            {"tile_count": 1},
+            "",
+            "",
+            {
+                "bbox": SWISS_BBOX,
+                "sources": {"swissalti3d": {"bbox": SWISS_BBOX}, "glo30": {}},
+            },
+        )
+
+
+# --- Two sources (SNOW-1505) ----------------------------------------------------
+
+#: swissALTI3D's published extent, and the Mapterhorn area round it.
+SWISS_BBOX = [5.95, 45.82, 10.49, 47.81]
+ALPS_BBOX = [5.0, 43.7, 16.6, 48.4]
+CREDITS = [
+    {
+        "id": "at1",
+        "name": "ALS-DGM Hoehenraster",
+        "producer": "BEV",
+        "licence": "CC-BY-4.0",
+        "url": "https://www.bev.gv.at",
+        "native_resolution_m": 1.0,
+        "attribution": "© BEV",
+    },
+    {
+        "id": "ittrentino",
+        "name": "LiDAR PAT",
+        "producer": "Provincia autonoma di Trento",
+        "licence": "CC BY 2.5",
+        "url": "https://siat.provincia.tn.it",
+        "native_resolution_m": 5.0,
+        "attribution": "© Provincia autonoma di Trento",
+    },
+]
+
+
+def two_source_manifest(resolution: float = 5.0) -> dict[str, Any]:
+    return {
+        "bbox": ALPS_BBOX,
+        "count": 43650,
+        "survey_years": [2019, 2024],
+        "sources": {
+            "swissalti3d": {"bbox": SWISS_BBOX, "count": 43650},
+            "mapterhorn": {
+                "bbox": ALPS_BBOX,
+                "release": "2026-11-01",
+                "dem_version": "2026-12",
+                "native_resolution_m": resolution,
+                "credits": CREDITS,
+            },
+        },
+    }
+
+
+def test_sources_are_swissalti3d_then_one_mapterhorn_entry() -> None:
+    doc = grid_json({"tile_count": 9}, "https://o", "v2", two_source_manifest())
+
+    assert [s["id"] for s in doc["sources"]] == ["swissalti3d", "mapterhorn"]
+    mapterhorn = doc["sources"][1]
+    assert mapterhorn["quality"] == "lidar"
+    assert mapterhorn["native_resolution_m"] == 5.0
+    assert mapterhorn["credits"] == CREDITS
+    assert mapterhorn["release"] == "2026-11-01"
+    assert mapterhorn["dem_version"] == "2026-12"
+    assert doc["attribution"] == "© swisstopo, Mapterhorn"
+    # Every field SNOW-917's source_from_payload requires, on both entries.
+    for entry in doc["sources"]:
+        for key in (
+            "id",
+            "name",
+            "provider",
+            "native_resolution_m",
+            "quality",
+            "attribution",
+            "licence",
+            "licence_url",
+            "source_url",
+        ):
+            assert entry[key] is not None, (entry["id"], key)
+        assert len(entry["coverage"]["bbox"]) == 4
+        assert len(entry["coverage"]["tile_x"]) == 2
+        assert len(entry["coverage"]["tile_y"]) == 2
+
+
+def test_swissalti3d_coverage_comes_from_its_own_extent() -> None:
+    # Not from the merged raster, which also holds Austria: a swissALTI3D
+    # rectangle stretched over the Alps would claim 2 m ground in the Tyrol.
+    doc = grid_json({"tile_count": 9}, "", "", two_source_manifest())
+    swiss, mapterhorn = (s["coverage"] for s in doc["sources"])
+
+    w, s, e, n = SWISS_BBOX
+    expected = snap_extent(*lonlat_extent(w, s, e, n), margin_tiles=0)
+    assert swiss["bbox"] == [
+        expected.west,
+        expected.south,
+        expected.east,
+        expected.north,
+    ]
+    assert swiss["tile_x"] == [expected.tile_x, expected.tile_x + expected.tiles_x - 1]
+    assert mapterhorn["bbox"][0] < swiss["bbox"][0]
+    assert mapterhorn["bbox"][2] > swiss["bbox"][2]
+
+
+def test_swissalti3d_coverage_holds_every_swiss_cell() -> None:
+    coverage = grid_json({"tile_count": 9}, "", "", two_source_manifest())["sources"][
+        0
+    ]["coverage"]
+    west, south, east, north = coverage["bbox"]
+
+    for lon in (SWISS_BBOX[0], SWISS_BBOX[2]):
+        for lat in (SWISS_BBOX[1], SWISS_BBOX[3]):
+            easting, northing = lonlat_to_grid(lon, lat)
+            assert west <= easting < east
+            assert south <= northing < north
+
+
+@pytest.mark.parametrize("resolution", [2.0, 1.0, None])
+def test_mapterhorn_must_be_coarser_than_swissalti3d(resolution: float | None) -> None:
+    # Same quality tier, so SNOW-917 breaks the tie on resolution: a finer
+    # mapterhorn figure would take Swiss points away from swissALTI3D.
+    manifest = two_source_manifest()
+    manifest["sources"]["mapterhorn"]["native_resolution_m"] = resolution
+
+    with pytest.raises(ValueError, match="coarser than"):
+        grid_json({"tile_count": 9}, "", "", manifest)
+
+
+def test_mapterhorn_without_credits_is_refused() -> None:
+    manifest = two_source_manifest()
+    manifest["sources"]["mapterhorn"]["credits"] = []
+
+    with pytest.raises(ValueError, match="credits"):
+        grid_json({"tile_count": 9}, "", "", manifest)

@@ -1,0 +1,91 @@
+{
+  "_comment": "SNOW-1505. Named places verify.sh checks the published terrain grid against outside Switzerland. Summits: the published height of each national mapping agency, accepted from 15 m below to 2 m above (a 5 m cell averages a summit down; it never builds one up). Coordinates are the summits' published WGS84 positions as best known (coordinates_source), not surveyed by us. Profiles: a 2 km line across the border, centred on it, bearing pointing out of Switzerland. Absent: ground no source covers, which must answer 204.",
+  "tolerance": {"below_m": 15, "above_m": 2},
+  "summits": [
+    {
+      "name": "Grossglockner (AT)",
+      "lon": 12.69444,
+      "lat": 47.07472,
+      "height_m": 3798,
+      "height_source": "BEV (Bundesamt fuer Eich- und Vermessungswesen)",
+      "height_url": "https://www.bev.gv.at/",
+      "coordinates_source": "https://en.wikipedia.org/wiki/Grossglockner",
+      "tolerance": {"below_m": 15, "above_m": 2}
+    },
+    {
+      "name": "Zugspitze (DE)",
+      "lon": 10.98528,
+      "lat": 47.42111,
+      "height_m": 2962,
+      "height_source": "LDBV Bayern (Landesamt fuer Digitalisierung, Breitband und Vermessung)",
+      "height_url": "https://www.ldbv.bayern.de/",
+      "coordinates_source": "https://en.wikipedia.org/wiki/Zugspitze",
+      "tolerance": {"below_m": 15, "above_m": 2}
+    },
+    {
+      "name": "Ortler (IT)",
+      "lon": 10.54500,
+      "lat": 46.50889,
+      "height_m": 3905,
+      "height_source": "IGM (Istituto Geografico Militare)",
+      "height_url": "https://www.igmi.org/",
+      "coordinates_source": "https://en.wikipedia.org/wiki/Ortler",
+      "tolerance": {"below_m": 15, "above_m": 2}
+    },
+    {
+      "name": "Marmolada, Punta Penia (IT)",
+      "lon": 11.85083,
+      "lat": 46.43444,
+      "height_m": 3343,
+      "height_source": "IGM (Istituto Geografico Militare)",
+      "height_url": "https://www.igmi.org/",
+      "coordinates_source": "https://en.wikipedia.org/wiki/Marmolada",
+      "tolerance": {"below_m": 15, "above_m": 2}
+    },
+    {
+      "name": "Barre des Ecrins (FR)",
+      "lon": 6.36028,
+      "lat": 44.92222,
+      "height_m": 4102,
+      "height_source": "IGN (Institut national de l'information geographique et forestiere)",
+      "height_url": "https://www.geoportail.gouv.fr/",
+      "coordinates_source": "https://en.wikipedia.org/wiki/Barre_des_%C3%89crins",
+      "tolerance": {"below_m": 15, "above_m": 2}
+    },
+    {
+      "name": "Aiguille du Midi (FR)",
+      "lon": 6.88750,
+      "lat": 45.87889,
+      "height_m": 3842,
+      "height_source": "IGN (Institut national de l'information geographique et forestiere)",
+      "height_url": "https://www.geoportail.gouv.fr/",
+      "coordinates_source": "https://en.wikipedia.org/wiki/Aiguille_du_Midi",
+      "tolerance": {"below_m": 15, "above_m": 2}
+    }
+  ],
+  "profiles": [
+    {
+      "name": "Theodul Pass (CH/IT)",
+      "lon": 7.711,
+      "lat": 45.944,
+      "bearing_deg": 180,
+      "foreign": "IT",
+      "length_m": 2000,
+      "step_m": 5,
+      "max_step_m": 3.0
+    },
+    {
+      "name": "Piz Buin (CH/AT)",
+      "lon": 10.118,
+      "lat": 46.844,
+      "bearing_deg": 0,
+      "foreign": "AT",
+      "length_m": 2000,
+      "step_m": 5,
+      "max_step_m": 3.0
+    }
+  ],
+  "absent": [
+    {"name": "Lyon", "lon": 4.835, "lat": 45.764}
+  ]
+}
