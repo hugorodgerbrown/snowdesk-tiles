@@ -32,11 +32,16 @@ entry) lives in `snowdesk-data-pipeline` under SNOW-242.
 | `scripts/build.sh` | Runs the three above to assemble `dist/`. |
 | `scripts/upload.sh` | Publishes `dist/` to R2 with per-class Content-Type and Cache-Control. |
 | `scripts/setup-bucket.sh` | One-time bucket creation. |
-| `scripts/vm-build.sh` | Builds the archive on a throwaway VM and uploads it to R2. |
+| `scripts/vm-build.sh` | Builds the archive on a throwaway VM and uploads it to R2. `terrain` compares Swiss heights with the live grid before it uploads. |
 | `scripts/terrain_grid.py` | The terrain grid's geometry and encoding. The contract with SNOW-917. |
 | `scripts/fetch_swissalti3d.py` | Lists the swissALTI3D squares over a box, from swisstopo's STAC API. |
 | `scripts/cut_terrain_tiles.py` | Cuts the warped raster into skirted Int16 tiles, and writes `grid.json`. |
-| `scripts/build-terrain.sh` | Runs the three above plus GDAL → `dist/terrain/`. One-off; needs ~100 GB. |
+| `scripts/terrarium.py` | Lists the z14 tiles of the supported area, decodes their Terrarium heights and mosaics them as an EPSG:3857 VRT. Needs numpy and Pillow. |
+| `scripts/mapterhorn_sources.py` | Picks the national models Mapterhorn holds (never GLO-30), writes the clip polygons and the credits, widens the manifest, and writes `verify-gap.json`. `probe` lists what Mapterhorn publishes. |
+| `scripts/datum_check.py` | Stops the terrain build if heights step by over 1 m across the border at the crossings in `scripts/datum_points.json`. |
+| `scripts/composite-terrain.sh` | Composites the warped Mapterhorn fill under the unchanged swissALTI3D warp. |
+| `scripts/compare_grids.py` | Fails if a rebuilt grid changed any height a reference grid holds; `sample` fetches the reference from the live grid. |
+| `scripts/build-terrain.sh` | Runs the above plus GDAL → `dist/terrain/`: swissALTI3D, and the Alps beyond from the elevation copy. One-off; needs ~400 GB. |
 | `scripts/terrain_class.py` | The terrain-class pixel contract and kernel (a copy of `sample_slope`'s). |
 | `scripts/classify_terrain.py` | Classifies `grid.raw` into three EPSG:3035 class planes. The one numpy script. |
 | `scripts/cut_terrain_class_tiles.py` | Cuts the warped class rasters into PNG tiles, and writes `tiles.json`. |
@@ -45,6 +50,7 @@ entry) lives in `snowdesk-data-pipeline` under SNOW-242.
 | `scripts/dem_archives.py` | Picks the Mapterhorn archives the area touches, writes the copy's `manifest.json`, and turns a point into a tile. |
 | `scripts/build-dem.sh` | `pmtiles extract --region` from Mapterhorn → `dist/dem/<version>/`. On a VM; ~80 GB free. |
 | `scripts/verify.sh` | Acceptance checks against the live origin. |
+| `scripts/verify_points.json` | The summits, seam profiles and absent ground `verify.sh` checks the terrain grid against outside Switzerland. |
 | `worker/` | Worker serving XYZ tiles, and the CORS allowlist (`ALLOWED_ORIGINS`). `npm test` runs its routing tests. |
 
 ## Why R2 and not an origin server

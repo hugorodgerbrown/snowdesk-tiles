@@ -30,6 +30,12 @@
 # 1-2 GB of PNGs in ~20,000 tiles. Budget ~25 GB free on top of work/terrain.
 # The build prints the real tile count and byte total when it finishes.
 #
+# Since SNOW-1505 the grid reaches across the Alps — ~184,576 x 103,936 cells,
+# about 5.4 times Switzerland's — and these tiles are published as
+# TERRAIN_CLASS_VERSION v3. Scaled by area, again an estimate: ~57 GB of class
+# planes, ~55 GB of Mercator rasters and ~5-10 GB of PNGs. Budget ~125 GB free
+# on top of work/terrain.
+#
 # Every stage is skipped if its output is already there, so an interrupted run
 # resumes; FORCE_TERRAIN_CLASS=1 redoes them.
 
@@ -95,9 +101,9 @@ fi
 mkdir -p "$work" "$out"
 
 free_gb=$(df -Pk "$work" | awk 'NR==2 {print int($4 / 1048576)}')
-if [ "${free_gb:-0}" -lt 25 ]; then
-    echo "warning: ${free_gb} GB free; all of Switzerland needs ~25 GB of" >&2
-    echo "         class planes, Mercator rasters and tiles" >&2
+if [ "${free_gb:-0}" -lt 125 ]; then
+    echo "warning: ${free_gb} GB free; the Alps-wide grid needs ~125 GB of" >&2
+    echo "         class planes, Mercator rasters and tiles (Switzerland alone ~25 GB)" >&2
 fi
 
 # The grid's extent and shape, from the same call build-terrain.sh made, so the
