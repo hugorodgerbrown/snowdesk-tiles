@@ -1,0 +1,42 @@
+[
+ {
+  "source": "at1",
+  "name": "ALS-DGM Hoehenraster",
+  "producer": "BEV",
+  "license": "CC-BY-4.0",
+  "website": "https://www.bev.gv.at",
+  "resolution": 1
+ },
+ {
+  "source": "ittrentino",
+  "name": "LiDAR PAT 2014+2018",
+  "producer": "Provincia autonoma di Trento",
+  "license": "CC BY 2.5",
+  "website": "https://siat.provincia.tn.it",
+  "resolution": "5 m"
+ },
+ {
+  "source": "itbozen",
+  "name": "DGM",
+  "producer": "Provincia di Bolzano",
+  "license": "CC0",
+  "website": "https://geokatalog.buergernetz.bz.it",
+  "resolution": 2.5
+ },
+ {
+  "source": "frrgealti1metro",
+  "name": "RGE ALTI",
+  "producer": "IGN",
+  "license": "Licence Ouverte 2.0",
+  "website": "https://geoservices.ign.fr",
+  "resolution": 1
+ },
+ {
+  "source": "glo30",
+  "name": "Copernicus GLO-30",
+  "producer": "ESA",
+  "license": "Copernicus",
+  "website": "https://spacedata.copernicus.eu",
+  "resolution": 30
+ }
+]
