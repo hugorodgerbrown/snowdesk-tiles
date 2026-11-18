@@ -109,7 +109,10 @@ fi
 # Bump it for any change to the grid definition, not just to the heights: a
 # client caching tiles cut on one geometry and reading them under another
 # decodes silently wrong answers rather than failing.
-: "${TERRAIN_VERSION:=v1}"
+#
+# v2 (SNOW-1505): the Alps beyond Switzerland, from the national models in our
+# Mapterhorn copy, with swissALTI3D's heights unchanged inside its coverage.
+: "${TERRAIN_VERSION:=v2}"
 
 # XYZ-style template the Worker serves, relative to the origin. Written into
 # grid.json as tile_url_template.
@@ -150,6 +153,43 @@ fi
 # and still saturates a normal link.
 : "${TERRAIN_JOBS:=8}"
 
+# --- Terrain beyond Switzerland (SNOW-1505) ----------------------------------
+#
+# Outside swissALTI3D's coverage the grid is filled from our own copy of
+# Mapterhorn's Terrarium tiles (/dem/<version>/, SNOW-1444), clipped to the
+# coverage of the national models Mapterhorn holds. Ground only Copernicus
+# GLO-30 covers stays absent, and the Worker answers 204 there as before.
+
+# The part of the supported area (DEM_AREA) the Mapterhorn fill covers, as a
+# WGS84 box: west south east north, space separated. The Alps; the supported
+# area's Pyrenees and Corsica fall outside it.
+#
+# Set it EMPTY to rebuild the swissALTI3D-only grid exactly as v1 built it:
+#
+#     TERRAIN_MAPTERHORN_BBOX= TERRAIN_VERSION=v1 ./scripts/build-terrain.sh
+#
+# Hence `=` rather than `:=` — an explicitly empty value has to survive.
+: "${TERRAIN_MAPTERHORN_BBOX=5.0 43.7 16.6 48.4}"
+
+# Which of our elevation copies (dem/<version>/ on TILES_ORIGIN) the terrain
+# build reads its z14 tiles from. The copy's manifest.json must record
+# max_zoom >= 14; the build stops otherwise.
+: "${TERRAIN_DEM_VERSION:=2026-12}"
+
+# Mapterhorn's per-source credits, read from beside download_urls.json.
+: "${TERRAIN_MAPTERHORN_ATTRIBUTION:=${DEM_SOURCE_ORIGIN:-https://download.mapterhorn.com}/attribution.json}"
+
+# Mapterhorn's per-source coverage polygons: a GeoJSON or GeoPackage path, or an
+# http(s) URL to fetch one from. A GeoPackage is converted with ogr2ogr. Find
+# what Mapterhorn publishes with `python3 scripts/mapterhorn_sources.py probe`.
+: "${TERRAIN_MAPTERHORN_COVERAGE:=${TERRAIN_WORK_DIR}/mapterhorn/coverage.gpkg}"
+
+# The live terrain version the pre-upload check compares Swiss heights against
+# (vm-build.sh terrain), and the seed that picks its sample tiles. The seed is
+# fixed so a rerun checks the same tiles.
+: "${TERRAIN_REFERENCE_VERSION:=v1}"
+: "${TERRAIN_COMPARE_SEED:=1505}"
+
 # --- Terrain-class tileset (SNOW-987) ---------------------------------------
 #
 # A third set of objects on the origin, derived from the elevation grid above:
@@ -171,7 +211,9 @@ fi
 # v2: the first live build published z14 tiles whose bands were out of step (the
 # one-call warp this branch replaced with strips); v1 URLs stay cached for a
 # year at the edge and in browsers.
-: "${TERRAIN_CLASS_VERSION:=v2}"
+#
+# v3 (SNOW-1505): classified from the v2 grid, which reaches beyond Switzerland.
+: "${TERRAIN_CLASS_VERSION:=v3}"
 
 # Subdirectory of DIST_DIR, and the bucket prefix.
 : "${TERRAIN_CLASS_DIR:=terrain-class}"
@@ -242,6 +284,8 @@ export IMMUTABLE_CACHE STYLE_CACHE TILE_PATH TILE_VERSION PLANETILER_BOUNDS
 export TILE_MIN_ZOOM TILE_MAX_ZOOM
 export TERRAIN_VERSION TERRAIN_TILE_PATH TERRAIN_DIR TERRAIN_BBOX TERRAIN_GSD
 export TERRAIN_WORK_DIR TERRAIN_JOBS
+export TERRAIN_MAPTERHORN_BBOX TERRAIN_DEM_VERSION TERRAIN_MAPTERHORN_ATTRIBUTION
+export TERRAIN_MAPTERHORN_COVERAGE TERRAIN_REFERENCE_VERSION TERRAIN_COMPARE_SEED
 export TERRAIN_CLASS_VERSION TERRAIN_CLASS_DIR TERRAIN_CLASS_WORK_DIR
 export TERRAIN_CLASS_MIN_ZOOM TERRAIN_CLASS_MAX_ZOOM
 export DEM_SOURCE_ORIGIN DEM_AREA DEM_MAX_ZOOM DEM_DIR DEM_DOWNLOAD_THREADS
