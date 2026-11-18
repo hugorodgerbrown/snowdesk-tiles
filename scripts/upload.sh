@@ -148,8 +148,11 @@ if mirrored "$TERRAIN_DIR"; then
     # grid.json is excluded and copied below. It is JSON, not an Int16 tile, and
     # it is the pointer to everything else here — so it needs a different
     # Content-Type, a short TTL, and to land last.
+    # verify-gap.json (SNOW-1505) is the build's input to verify.sh, not a
+    # published object; the Worker would never serve it.
     s3 sync "${DIST_DIR}/${TERRAIN_DIR}" "s3://${R2_BUCKET}/${TERRAIN_DIR}" \
         --exclude 'grid.json' \
+        --exclude 'verify-gap.json' \
         --content-type application/octet-stream \
         --cache-control "$IMMUTABLE_CACHE"
 
