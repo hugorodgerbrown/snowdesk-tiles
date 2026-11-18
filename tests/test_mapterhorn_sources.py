@@ -519,13 +519,80 @@ def test_coverage_keeps_sources_meeting_the_box_and_skips_glo30(
     }
 
     features, met = mapterhorn_sources.coverage_features(
-        entries, (5.0, 43.7, 16.6, 48.4), tmp_path / "work", _ranged(blobs, calls)
+        entries,
+        (5.0, 43.7, 16.6, 48.4),
+        tmp_path / "work",
+        _ranged(blobs, calls),
+        tarball_base=None,
     )
 
     assert met == ["alps"]
     assert {f["properties"]["source"] for f in features} == {"alps"}
     fetched = len(calls)
     mapterhorn_sources.coverage_features(
-        entries, (5.0, 43.7, 16.6, 48.4), tmp_path / "work", _ranged(blobs, calls)
+        entries,
+        (5.0, 43.7, 16.6, 48.4),
+        tmp_path / "work",
+        _ranged(blobs, calls),
+        tarball_base=None,
     )
     assert len(calls) == fetched  # a rerun reads the kept GeoPackages
+
+
+def test_coverage_reads_tarballs_from_the_mirror_by_default(tmp_path: Path) -> None:
+    seen: list[str] = []
+
+    def fetch(url: str, start: int, end: int) -> bytes:
+        seen.append(url)
+        raise OSError("stop after the first request")
+
+    entries = {
+        "at1": {"tarball_url": "https://download.mapterhorn.com/sources/at1.tar"}
+    }
+    with pytest.raises(OSError):
+        mapterhorn_sources.coverage_features(entries, ALPS, tmp_path, fetch)
+
+    assert seen == [f"{mapterhorn_sources.TARBALL_BASE}/at1.tar"]
+
+
+def test_tar_member_streamed_stops_at_the_member() -> None:
+    blob = _tarball({"LICENSE.pdf": b"pdf", "coverage.gpkg": b"GPKG", "big": bytes(10)})
+    stream = io.BytesIO(blob)
+
+    data = mapterhorn_sources.tar_member_streamed(
+        "u", "coverage.gpkg", lambda _: stream
+    )
+
+    assert data == b"GPKG"
+    assert stream.closed
+
+
+def test_coverage_falls_back_to_the_origin_when_the_mirror_lacks_a_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import urllib.error
+
+    def fetch(url: str, start: int, end: int) -> bytes:
+        raise urllib.error.HTTPError(url, 404, "Not Found", {}, None)  # type: ignore[arg-type]
+
+    opened: list[str] = []
+
+    def opener(url: str) -> io.BytesIO:
+        opened.append(url)
+        return io.BytesIO(_tarball({"coverage.gpkg": b"not a gpkg"}))
+
+    def no_gdal(*args: Any, **kwargs: Any) -> None:
+        """Stand in for ogr2ogr, so the test needs no GDAL."""
+        raise subprocess.CalledProcessError(1, "ogr2ogr")
+
+    monkeypatch.setattr(subprocess, "run", no_gdal)
+    entries = {
+        "chzh": {"tarball_url": "https://download.mapterhorn.com/sources/chzh.tar"}
+    }
+    with pytest.raises(subprocess.CalledProcessError):
+        mapterhorn_sources.coverage_features(
+            entries, ALPS, tmp_path, fetch, opener=opener
+        )
+
+    assert opened == ["https://download.mapterhorn.com/sources/chzh.tar"]
+    assert (tmp_path / "chzh.gpkg").read_bytes() == b"not a gpkg"

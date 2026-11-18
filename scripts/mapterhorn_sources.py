@@ -56,6 +56,7 @@ import shutil
 import subprocess
 import sys
 import tarfile
+import urllib.error
 import urllib.request
 from collections.abc import Callable, Iterable, Sequence
 from pathlib import Path
@@ -594,6 +595,14 @@ MAX_TAR_HEADERS = 16
 
 TAR_BLOCK = 512
 
+#: Where the source tarballs are read from. download.mapterhorn.com answers a
+#: Range request with the whole file (HTTP 200), so the build reads Mapterhorn's
+#: source.coop mirror, which honours ranges, at <base>/<source>.tar.
+TARBALL_BASE = (
+    "https://s3.us-west-2.amazonaws.com/us-west-2.opendata.source.coop"
+    "/mapterhorn/mapterhorn/sources"
+)
+
 
 def fetch_range(url: str, start: int, end: int) -> bytes:
     """Return bytes ``start``..``end`` (inclusive) of an http(s) URL."""
@@ -640,12 +649,46 @@ def tar_member(
     raise ValueError(f"{url}: no {name} in its first {MAX_TAR_HEADERS} members")
 
 
+def open_stream(url: str) -> Any:
+    """Return a streaming response for an http(s) URL; the caller closes it."""
+    if not url.startswith(("http://", "https://")):
+        raise ValueError(f"refusing to fetch non-HTTP url: {url}")
+    request = urllib.request.Request(  # noqa: S310 - scheme checked above
+        url, headers={"User-Agent": "snowdesk-tiles"}
+    )
+    return urllib.request.urlopen(request, timeout=120)  # noqa: S310 - checked
+
+
+def tar_member_streamed(
+    url: str, name: str, opener: Callable[[str], Any] = open_stream
+) -> bytes:
+    """Return one member of a remote tarball by reading it from the start.
+
+    For a server that ignores Range. The member sits near the start of the
+    tarball, so the download is closed as soon as it has been read.
+    """
+    stream = opener(url)
+    try:
+        with tarfile.open(fileobj=stream, mode="r|") as tar:
+            for count, member in enumerate(tar):
+                if member.name == name or member.name.endswith("/" + name):
+                    handle = tar.extractfile(member)
+                    return handle.read() if handle else b""
+                if count + 1 >= MAX_TAR_HEADERS:
+                    break
+    finally:
+        stream.close()
+    raise ValueError(f"{url}: no {name} in its first {MAX_TAR_HEADERS} members")
+
+
 def coverage_features(
     entries: dict[str, dict[str, Any]],
     bbox: Box,
     work: Path,
     fetch: Callable[[str, int, int], bytes] = fetch_range,
     ogr2ogr: str = "ogr2ogr",
+    tarball_base: str | None = TARBALL_BASE,
+    opener: Callable[[str], Any] = open_stream,
 ) -> tuple[list[dict[str, Any]], list[str]]:
     """Return every national source's coverage features meeting ``bbox``.
 
@@ -662,10 +705,25 @@ def coverage_features(
         url = entries[source].get("tarball_url")
         if not url:
             raise ValueError(f"attribution for {source} has no tarball_url")
+        origin = str(url)
+        if tarball_base:
+            url = f"{tarball_base.rstrip('/')}/{origin.rsplit('/', 1)[-1]}"
         gpkg = work / f"{source}.gpkg"
         if not gpkg.exists():
             part = gpkg.with_suffix(".part")
-            part.write_bytes(tar_member(str(url), COVERAGE_MEMBER, fetch))
+            try:
+                data = tar_member(str(url), COVERAGE_MEMBER, fetch)
+            except urllib.error.HTTPError as error:
+                if error.code != 404 or url == origin:
+                    raise
+                # Not on the mirror (yet): read it from Mapterhorn's own server,
+                # from the start, stopping once the member has been read.
+                print(
+                    f"    {source}: not on the mirror; reading {origin}",
+                    file=sys.stderr,
+                )
+                data = tar_member_streamed(origin, COVERAGE_MEMBER, opener)
+            part.write_bytes(data)
             part.rename(gpkg)
         out = work / f"{source}.geojson"
         # The GeoJSON driver cannot overwrite a layer in place.
@@ -735,6 +793,11 @@ def main(argv: list[str] | None = None) -> int:
     _add_bbox(p_cov)
     p_cov.add_argument("--work", type=Path, required=True)
     p_cov.add_argument("--out", type=Path, required=True)
+    p_cov.add_argument(
+        "--tarball-base",
+        default=TARBALL_BASE,
+        help="where <source>.tar is read from (empty: attribution's tarball_url)",
+    )
 
     p_select = sub.add_parser("select", help="write the clip file and credits")
     p_select.add_argument("--coverage", type=Path, required=True)
@@ -783,7 +846,10 @@ def main(argv: list[str] | None = None) -> int:
             print("error: ogr2ogr not found — install gdal-bin", file=sys.stderr)
             return 1
         features, met = coverage_features(
-            attribution_entries(_read(args.attribution)), _bbox(args.bbox), args.work
+            attribution_entries(_read(args.attribution)),
+            _bbox(args.bbox),
+            args.work,
+            tarball_base=args.tarball_base or None,
         )
         document = {"type": "FeatureCollection", "features": features}
         args.out.write_text(json.dumps(document), encoding="utf-8")
