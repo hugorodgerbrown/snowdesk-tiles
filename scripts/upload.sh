@@ -205,9 +205,13 @@ if mirrored "$TERRAIN_CLASS_DIR"; then
     fi
     # --exclude also keeps the live tiles.json out of the deletion.
     echo "    to ${class_prefix}/"
+    # A legacy (unversioned) publish syncs the set's root, which also holds
+    # every later version's prefix: exclude them, or --delete would wipe them.
+    # Legacy zoom directories are numbers, so v* matches only versions.
     s3 sync "${DIST_DIR}/${TERRAIN_CLASS_DIR}" "s3://${R2_BUCKET}/${class_prefix}" \
         --delete \
         --exclude 'tiles.json' \
+        --exclude 'v*' \
         --content-type image/png \
         --cache-control "$IMMUTABLE_CACHE"
 
