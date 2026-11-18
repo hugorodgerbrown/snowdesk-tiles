@@ -13,6 +13,7 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -352,3 +353,219 @@ def test_definition_publishes_the_boundary_rule() -> None:
 
     assert "[south, north)" in rule
     assert "north and east" in rule
+
+
+# --- Sources beyond Switzerland (SNOW-1505) ---------------------------------
+
+
+def test_the_registry_holds_swissalti3d_and_one_mapterhorn_entry() -> None:
+    from terrain_grid import SOURCES
+
+    assert list(SOURCES) == ["swissalti3d", "mapterhorn"]
+    mapterhorn = SOURCES["mapterhorn"]
+    # Every field SNOW-917's source_from_payload requires, bar the per-build
+    # resolution and coverage that grid_json adds.
+    for key in (
+        "id",
+        "name",
+        "provider",
+        "quality",
+        "attribution",
+        "licence",
+        "licence_url",
+        "source_url",
+    ):
+        assert mapterhorn[key], key
+    assert mapterhorn["quality"] == "lidar"
+    assert mapterhorn["native_resolution_m"] is None
+
+
+def test_the_attribution_credits_both_sources() -> None:
+    from terrain_grid import ATTRIBUTION, SWISS_ONLY_ATTRIBUTION
+
+    assert ATTRIBUTION == "© swisstopo, Mapterhorn"
+    assert definition()["attribution"] == ATTRIBUTION
+    assert SWISS_ONLY_ATTRIBUTION == "© swisstopo"
+
+
+def test_the_class_tiles_carry_the_same_attribution() -> None:
+    from terrain_class import descriptor
+
+    assert descriptor()["attribution"] == "© swisstopo, Mapterhorn"
+
+
+# --- Seam profiles ------------------------------------------------------------
+
+
+def ramp(step_at_seam: float) -> tuple[list[float], list[float | None]]:
+    """Return a 2 km, 5 m profile on a 10% ramp with a step at distance 0."""
+    from terrain_grid import profile_points
+
+    distances = [sample[0] for sample in profile_points(7.7, 46.0, 180)]
+    heights: list[float | None] = [
+        2000.0 + 0.1 * d + (step_at_seam if d > 0 else 0.0) for d in distances
+    ]
+    return distances, heights
+
+
+def test_profile_points_are_2km_at_5m_centred_on_the_point() -> None:
+    from terrain_grid import profile_points
+
+    samples = profile_points(7.711, 45.944, 180)
+    distances = [sample[0] for sample in samples]
+
+    assert len(samples) == 401
+    assert distances[0] == -1000.0
+    assert distances[-1] == 1000.0
+    assert samples[200][1:] == (7.711, 45.944)
+    # Bearing 180 runs south: the far end is south of the centre.
+    assert samples[-1][2] < 45.944 < samples[0][2]
+    e0, n0 = lonlat_to_grid(*samples[0][1:])
+    e1, n1 = lonlat_to_grid(*samples[1][1:])
+    assert ((e1 - e0) ** 2 + (n1 - n0) ** 2) ** 0.5 == pytest.approx(5.0, abs=0.05)
+
+
+def test_a_half_metre_step_passes_and_a_four_metre_step_fails() -> None:
+    from terrain_grid import assess_profile, seam_step
+
+    expect = {"seam_m": 2.5, "covered": [[5.0, 1000.0]], "foreign_covered": True}
+    small = ramp(0.5)
+    large = ramp(4.0)
+
+    assert seam_step(*small, seam_m=2.5) == pytest.approx(0.5, abs=1e-6)
+    failures, step = assess_profile(*small, expect, 3.0)
+    assert failures == []
+    assert step == pytest.approx(0.5)
+    failures, step = assess_profile(*large, expect, 3.0)
+    assert step == pytest.approx(4.0)
+    assert failures == ["seam step 4.00 m exceeds 3 m"]
+
+
+def test_a_continuing_slope_is_not_a_step() -> None:
+    # Why a fit rather than the two nearest cells: on a 10% ramp, neighbours
+    # 5 m apart differ by half a metre with no seam at all.
+    from terrain_grid import seam_step
+
+    assert seam_step(*ramp(0.0), seam_m=2.5) == pytest.approx(0.0, abs=1e-9)
+
+
+def test_a_side_with_too_few_heights_has_no_step() -> None:
+    from terrain_grid import seam_step
+
+    distances, heights = ramp(0.0)
+    heights = [h if d < 0 else None for d, h in zip(distances, heights, strict=True)]
+
+    with pytest.raises(ValueError, match="far side"):
+        seam_step(distances, heights, seam_m=2.5)
+
+
+def test_a_covered_cell_without_a_height_fails() -> None:
+    from terrain_grid import assess_profile
+
+    distances, heights = ramp(0.0)
+    heights[300] = None  # 500 m into the covered foreign side
+    expect = {"seam_m": 2.5, "covered": [[5.0, 1000.0]], "foreign_covered": True}
+
+    failures, _ = assess_profile(distances, heights, expect, 3.0)
+
+    assert failures == ["no height inside coverage at 500 m"]
+
+
+def test_an_uncovered_foreign_side_must_read_no_height() -> None:
+    # Theodul, if the Aosta side has no national model: the Italian side is
+    # 204, and a height there would be GLO-30 that slipped past the clip.
+    from terrain_grid import assess_profile
+
+    distances, heights = ramp(0.0)
+    expect = {"seam_m": 2.5, "covered": [], "foreign_covered": False}
+    absent = [h if d < 2.5 else None for d, h in zip(distances, heights, strict=True)]
+
+    assert assess_profile(distances, absent, expect, 3.0) == ([], None)
+    failures, _ = assess_profile(distances, heights, expect, 3.0)
+    assert len(failures) == 199
+    assert "no national model" in failures[0]
+
+
+def test_sample_heights_reads_a_204_as_no_height() -> None:
+    from terrain_grid import sample_heights
+
+    fetched: list[str] = []
+
+    def fetch(url: str) -> bytes | None:
+        fetched.append(url)
+        return None
+
+    heights = sample_heights("https://t.example/terrain/v2/", [(7.7, 46.0)] * 3, fetch)
+
+    assert heights == [None, None, None]
+    assert len(fetched) == 1  # one tile, fetched once
+    assert fetched[0].startswith("https://t.example/terrain/v2/")
+
+
+# --- verify_points.json --------------------------------------------------------
+
+
+def verify_points() -> dict[str, Any]:
+    document: dict[str, Any] = json.loads(
+        (ROOT / "scripts" / "verify_points.json").read_text()
+    )
+    return document
+
+
+def test_every_summit_has_a_source_and_the_agreed_tolerance() -> None:
+    summits = verify_points()["summits"]
+
+    assert {s["name"].split(" (")[0] for s in summits} == {
+        "Grossglockner",
+        "Zugspitze",
+        "Ortler",
+        "Marmolada, Punta Penia",
+        "Barre des Ecrins",
+        "Aiguille du Midi",
+    }
+    for summit in summits:
+        assert summit["height_source"]
+        assert summit["height_url"].startswith("https://")
+        assert summit["coordinates_source"].startswith("https://")
+        # Published height -15 m to +2 m: a 5 m cell averages a summit down.
+        assert summit["tolerance"] == {"below_m": 15, "above_m": 2}
+        assert 5.0 <= summit["lon"] <= 16.6
+        assert 43.7 <= summit["lat"] <= 48.4
+
+
+def test_the_published_heights_are_the_agencies() -> None:
+    heights = {s["name"]: s["height_m"] for s in verify_points()["summits"]}
+
+    assert heights["Grossglockner (AT)"] == 3798
+    assert heights["Zugspitze (DE)"] == 2962
+    assert heights["Ortler (IT)"] == 3905
+    assert heights["Marmolada, Punta Penia (IT)"] == 3343
+    assert heights["Barre des Ecrins (FR)"] == 4102
+    assert heights["Aiguille du Midi (FR)"] == 3842
+
+
+def test_the_seam_profiles_are_theodul_and_piz_buin() -> None:
+    profiles = {p["name"]: p for p in verify_points()["profiles"]}
+
+    theodul = profiles["Theodul Pass (CH/IT)"]
+    buin = profiles["Piz Buin (CH/AT)"]
+    assert (theodul["lon"], theodul["lat"]) == (7.711, 45.944)
+    assert (buin["lon"], buin["lat"]) == (10.118, 46.844)
+    for profile in profiles.values():
+        assert profile["length_m"] == 2000
+        assert profile["step_m"] == 5
+        assert profile["max_step_m"] == 3.0
+
+
+def test_profile_points_cli_lists_every_sample(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from terrain_grid import main
+
+    assert main(["profile-points"]) == 0
+
+    lines = capsys.readouterr().out.splitlines()
+    assert len(lines) == 2 * 401
+    name, rest = lines[0].split("\t")
+    assert name == "Theodul Pass (CH/IT)"
+    assert len(rest.split()) == 5
