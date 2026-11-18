@@ -54,7 +54,7 @@ import fetch_swissalti3d
 import numpy as np
 from numpy.typing import NDArray
 from terrain_grid import CELL_SIZE_M, HEIGHT_NODATA_M, lonlat_to_grid
-from terrarium import ZOOM, decode_tiles, tile_path, tiles_for_area
+from terrarium import ZOOM, decode_tiles, tile_path, tiles_for_box
 
 POINTS = Path(__file__).resolve().parent / "datum_points.json"
 
@@ -247,6 +247,15 @@ def _warp(
     return heights
 
 
+def crossing_box(lon: float, lat: float) -> tuple[float, float, float, float]:
+    """Return the (west, south, east, north) box fetched round a crossing.
+
+    About 900 m a side: it holds the 200 m line and its strips with room for
+    the border to sit anywhere the search allows.
+    """
+    return (lon - 0.006, lat - 0.004, lon + 0.006, lat + 0.004)
+
+
 def check_crossing(
     crossing: dict[str, Any], work: Path, dem_url: str, clip: Path, gsd: float
 ) -> DatumResult:
@@ -255,7 +264,7 @@ def check_crossing(
     lon, lat = float(crossing["lon"]), float(crossing["lat"])
     here = work / "".join(ch if ch.isalnum() else "-" for ch in name)
     te = window(lon, lat)
-    box = (lon - 0.006, lat - 0.004, lon + 0.006, lat + 0.004)
+    box = crossing_box(lon, lat)
 
     chosen = fetch_swissalti3d.select(fetch_swissalti3d.items(box), gsd)
     tifs = []
@@ -266,19 +275,9 @@ def check_crossing(
     if not tifs:
         raise RuntimeError(f"{name}: no swissALTI3D squares near the crossing")
 
-    area = {
-        "type": "Polygon",
-        "coordinates": [
-            [
-                [box[0], box[1]],
-                [box[2], box[1]],
-                [box[2], box[3]],
-                [box[0], box[3]],
-                [box[0], box[1]],
-            ]
-        ],
-    }
-    tiles = tiles_for_area(area, ZOOM)
+    # Every tile the window touches: the window is smaller than a z14 tile, so
+    # a centre-in-area test can find none.
+    tiles = tiles_for_box(box, ZOOM)
     for x, y in tiles:
         _download(
             f"{dem_url.rstrip('/')}/{ZOOM}/{x}/{y}.webp",

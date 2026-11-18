@@ -119,7 +119,9 @@ out="${DIST_DIR}/${TERRAIN_DIR}"
 # apart from manifest.json, which becomes the widened one every later stage
 # (and build-terrain-class.sh) reads the extent from; swissALTI3D's published
 # coverage still comes from its own extent.
-m_dir="${work}/mapterhorn"
+# Keyed by the elevation copy's version, so a rerun against another copy never
+# decodes tiles fetched from the old one under the new copy's provenance.
+m_dir="${work}/mapterhorn/${TERRAIN_DEM_VERSION}"
 dem_url="${TILES_ORIGIN}/${DEM_DIR}/${TERRAIN_DEM_VERSION}"
 if [ "$mapterhorn" = 1 ]; then
     swiss_manifest="${work}/swissalti3d-manifest.json"
@@ -199,7 +201,7 @@ EOF
 
     echo "==> datum check at the border crossings"
     "$python" scripts/datum_check.py \
-        --work "${work}/datum" \
+        --work "${work}/datum/${TERRAIN_DEM_VERSION}" \
         --dem-url "$dem_url" \
         --clip "${m_dir}/clip.geojson" \
         --gsd "$TERRAIN_GSD"
@@ -341,7 +343,9 @@ echo "==> grid ${cols}x${rows} cells, ${tiles_x}x${tiles_y} tiles from (${tile_x
 # A raster is reused only if it was made over this extent: a warped.tif left by
 # a Swiss-only run is a different shape from the one an Alps-wide run needs.
 stamp="${te_w} ${te_s} ${te_e} ${te_n}"
-current() { [ -s "$1" ] && [ "$(cat "${1}.extent" 2>/dev/null)" = "$stamp" ] && [ "${FORCE_TERRAIN:-0}" != "1" ]; }
+current() { [ -s "$1" ] && [ "$(cat "${1}.extent" 2>/dev/null)" = "${2:-$stamp}" ] && [ "${FORCE_TERRAIN:-0}" != "1" ]; }
+# The Mapterhorn rasters also depend on which elevation copy filled them.
+m_stamp="${stamp} dem=${TERRAIN_DEM_VERSION}"
 
 if current "$warped"; then
     echo "==> ${warped} exists — skipping warp; FORCE_TERRAIN=1 to redo"
@@ -377,7 +381,7 @@ fi
 
 grid_source=$warped
 if [ "$mapterhorn" = 1 ]; then
-    if current "$mapterhorn_tif"; then
+    if current "$mapterhorn_tif" "$m_stamp"; then
         echo "==> ${mapterhorn_tif} exists — skipping warp; FORCE_TERRAIN=1 to redo"
     else
         echo "==> warping the Mapterhorn fill to EPSG:3035 at ${cell} m"
@@ -397,16 +401,16 @@ if [ "$mapterhorn" = 1 ]; then
             -co TILED=YES -co COMPRESS=DEFLATE -co BIGTIFF=YES \
             -overwrite \
             "$mosaic" "$mapterhorn_tif"
-        echo "$stamp" >"${mapterhorn_tif}.extent"
+        echo "$m_stamp" >"${mapterhorn_tif}.extent"
     fi
 
-    if current "$merged" && [ "$merged" -nt "$warped" ] && [ "$merged" -nt "$mapterhorn_tif" ]; then
+    if current "$merged" "$m_stamp" && [ "$merged" -nt "$warped" ] && [ "$merged" -nt "$mapterhorn_tif" ]; then
         echo "==> ${merged} exists — skipping composite; FORCE_TERRAIN=1 to redo"
     else
         echo "==> compositing: Mapterhorn first, swissALTI3D last"
         ./scripts/composite-terrain.sh "$mapterhorn_tif" "$warped" "$merged" \
             "$te_w" "$te_s" "$te_e" "$te_n"
-        echo "$stamp" >"${merged}.extent"
+        echo "$m_stamp" >"${merged}.extent"
     fi
     grid_source=$merged
 fi

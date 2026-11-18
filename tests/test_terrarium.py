@@ -31,11 +31,13 @@ from terrarium import (  # noqa: E402
     lonlat_to_tile,
     main,
     read_tile,
+    tile_lonlat_bounds,
     tile_path,
     tile_size_m,
     tile_to_lonlat,
     tiles_bbox,
     tiles_for_area,
+    tiles_for_box,
 )
 
 TILE_PX = 4  # small tiles keep the fixtures readable; the maths is the same
@@ -145,6 +147,27 @@ def test_listing_takes_the_tiles_whose_centres_are_inside() -> None:
     assert tiles == sorted(
         (x12 * 4 + dx, y12 * 4 + dy) for dx in range(4) for dy in range(4)
     )
+
+
+def test_box_listing_takes_a_tile_whose_centre_is_outside() -> None:
+    # A box well inside one z14 tile, away from its centre.
+    west, south, east, north = tile_lonlat_bounds(8631, 5736, 14)
+    box = (west + 1e-4, south + 1e-4, west + 2e-3, south + 2e-3)
+
+    assert tiles_for_box(box, 14) == [(8631, 5736)]
+    assert tiles_for_area(box_area(*box), 14) == []
+
+
+def test_box_listing_takes_every_tile_it_straddles() -> None:
+    _, _, east, north = tile_lonlat_bounds(8631, 5736, 14)
+    box = (east - 1e-3, north - 1e-3, east + 1e-3, north + 1e-3)
+
+    assert tiles_for_box(box, 14) == [
+        (8631, 5735),
+        (8631, 5736),
+        (8632, 5735),
+        (8632, 5736),
+    ]
 
 
 def test_listing_honours_the_box() -> None:

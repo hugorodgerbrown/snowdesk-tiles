@@ -249,6 +249,22 @@ def tiles_for_area(
     return sorted(cells)
 
 
+def tiles_for_box(box: Box, zoom: int) -> list[Tile]:
+    """Return every tile at ``zoom`` that overlaps a (west, south, east, north) box.
+
+    Unlike ``tiles_for_area``, which takes a tile only when its centre is inside
+    the area, this takes any tile the box touches. A box smaller than a tile
+    (a datum-check window, say) may hold no tile centre at all.
+    """
+    west, south, east, north = box
+    x0, y0 = lonlat_to_tile(west, north, zoom)
+    x1, y1 = lonlat_to_tile(east, south, zoom)
+    last = (1 << zoom) - 1
+    xs = range(max(0, math.floor(x0)), min(last, math.ceil(x1) - 1) + 1)
+    ys = range(max(0, math.floor(y0)), min(last, math.ceil(y1) - 1) + 1)
+    return [(x, y) for x in xs for y in ys]
+
+
 def tiles_bbox(tiles: Iterable[Tile], zoom: int) -> Box:
     """Return the (west, south, east, north) in degrees of a set of tiles."""
     xs, ys = zip(*tiles, strict=True)

@@ -22,11 +22,13 @@ from datum_check import (  # noqa: E402
     MIN_FLAT_CELLS,
     DatumResult,
     assess,
+    crossing_box,
     load_points,
     slope_deg,
     strips,
     window,
 )
+from terrarium import ZOOM, tile_lonlat_bounds, tiles_for_box  # noqa: E402
 
 SIZE = 60  # the 300 m window at 5 m
 
@@ -151,3 +153,18 @@ def test_datum_points_hold_the_four_crossings() -> None:
         "Meyrin-Saint-Genis-Pouilly (CH/FR)": (6.050, 46.243),
         "Stabio-Gaggiolo (CH/IT)": (8.915, 45.850),
     }
+
+
+def test_every_crossing_window_fetches_the_tiles_it_touches() -> None:
+    # Two crossings' windows hold no z14 tile centre, so a centre-in-area
+    # listing would fetch nothing and stop every build at the datum gate.
+    for crossing in load_points():
+        box = crossing_box(crossing["lon"], crossing["lat"])
+        tiles = tiles_for_box(box, ZOOM)
+        assert tiles, crossing["name"]
+        west = min(tile_lonlat_bounds(x, y, ZOOM)[0] for x, y in tiles)
+        south = min(tile_lonlat_bounds(x, y, ZOOM)[1] for x, y in tiles)
+        east = max(tile_lonlat_bounds(x, y, ZOOM)[2] for x, y in tiles)
+        north = max(tile_lonlat_bounds(x, y, ZOOM)[3] for x, y in tiles)
+        assert west <= box[0] and south <= box[1], crossing["name"]
+        assert east >= box[2] and north >= box[3], crossing["name"]
