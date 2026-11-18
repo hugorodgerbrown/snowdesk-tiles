@@ -9,10 +9,14 @@
 //                                           browser (SNOW-987).
 //
 // Neither is left to serveObject's pass-through, for two reasons. The version
-// segment has to be stripped — objects are stored unversioned so a rebuild
-// replaces them in place, while a new version still gives clients new URLs past
-// a year of immutable caching — and, more importantly, an absent tile has to be
+// segment picks the bucket keys, and, more importantly, an absent tile has to be
 // a 204 rather than a 404.
+//
+// Versions (SNOW-1505). The version each set was on when this changed
+// (`legacyVersions`) was stored unversioned, at terrain/{x}/{y}.s16, and stays there. Every later
+// version lives under its own prefix, terrain/<version>/{x}/{y}.s16, so a new
+// build can sit beside the live one until the app is pointed at it, and a
+// rollback is pointing it back. Nothing is replaced in place any more.
 //
 // That distinction is the point of the routes. Switzerland is a diagonal country
 // in a rectangular grid and most of the Alps has no source yet, so roughly half
@@ -48,20 +52,24 @@ export const TILESETS = [
     // the EPSG:3035 origin, and both are positive everywhere in Europe — so a
     // negative index is a caller's arithmetic bug, and 404 says so where 204
     // would look like ordinary missing coverage.
-    tilePath: /^\/terrain\/[^/]+\/(\d+)\/(\d+)\.s16$/,
-    tileKey: ([x, y]) => `terrain/${x}/${y}.s16`,
+    tilePath: /^\/terrain\/([^/]+)\/(\d+)\/(\d+)\.s16$/,
+    tileKey: ([x, y]) => `${x}/${y}.s16`,
     contentType: "application/octet-stream",
-    descriptorPath: /^\/terrain\/[^/]+\/grid\.json$/,
-    descriptorKey: "terrain/grid.json",
+    descriptorPath: /^\/terrain\/([^/]+)\/grid\.json$/,
+    descriptorKey: "grid.json",
+    legacyVersions: ["v1"],
   },
   {
     name: "terrain-class",
     prefix: "/terrain-class/",
-    tilePath: /^\/terrain-class\/[^/]+\/(\d+)\/(\d+)\/(\d+)\.png$/,
-    tileKey: ([z, x, y]) => `terrain-class/${z}/${x}/${y}.png`,
+    tilePath: /^\/terrain-class\/([^/]+)\/(\d+)\/(\d+)\/(\d+)\.png$/,
+    tileKey: ([z, x, y]) => `${z}/${x}/${y}.png`,
     contentType: "image/png",
-    descriptorPath: /^\/terrain-class\/[^/]+\/tiles\.json$/,
-    descriptorKey: "terrain-class/tiles.json",
+    descriptorPath: /^\/terrain-class\/([^/]+)\/tiles\.json$/,
+    descriptorKey: "tiles.json",
+    // Both: the class URL was published as v1 and as v2, and both read the
+    // unversioned keys.
+    legacyVersions: ["v1", "v2"],
     // The tiles exist at z12-14 only, which tiles.json states. Outside that a
     // 204 is the true answer — there is nothing at that zoom — and saves an R2
     // read for every tile MapLibre asks for before it has read the descriptor.
@@ -70,6 +78,13 @@ export const TILESETS = [
     maxZoom: 14,
   },
 ];
+
+/** Return the bucket key of ``rest`` within one version of a tileset. */
+export function versionedKey(tileset, version, rest) {
+  return tileset.legacyVersions.includes(version)
+    ? `${tileset.name}/${rest}`
+    : `${tileset.name}/${version}/${rest}`;
+}
 
 /** Return the tileset a path belongs to, or null. */
 export function tilesetFor(pathname) {
@@ -84,18 +99,23 @@ export function tilesetFor(pathname) {
  * path that is not a request this tileset understands.
  */
 export function resolve(tileset, pathname) {
-  if (tileset.descriptorPath.test(pathname)) {
-    return { kind: "descriptor", key: tileset.descriptorKey };
+  const descriptor = tileset.descriptorPath.exec(pathname);
+  if (descriptor) {
+    return {
+      kind: "descriptor",
+      key: versionedKey(tileset, descriptor[1], tileset.descriptorKey),
+    };
   }
   const match = tileset.tilePath.exec(pathname);
   if (!match) return { kind: "not-found" };
 
-  const indices = match.slice(1);
+  const version = match[1];
+  const indices = match.slice(2);
   if (tileset.minZoom !== undefined) {
     const zoom = Number(indices[0]);
     if (zoom < tileset.minZoom || zoom > tileset.maxZoom) return { kind: "empty" };
   }
-  return { kind: "tile", key: tileset.tileKey(indices) };
+  return { kind: "tile", key: versionedKey(tileset, version, tileset.tileKey(indices)) };
 }
 
 function notFound(message) {

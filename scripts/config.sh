@@ -125,7 +125,8 @@ if [ -z "${TERRAIN_TILE_PATH:-}" ]; then
 fi
 
 # Subdirectory of DIST_DIR, and the bucket prefix. The Worker maps
-# /terrain/<version>/{x}/{y}.s16 onto terrain/{x}/{y}.s16 in the bucket.
+# /terrain/v1/{x}/{y}.s16 onto terrain/{x}/{y}.s16 in the bucket, and any later
+# version onto terrain/<version>/{x}/{y}.s16 (SNOW-1505).
 : "${TERRAIN_DIR:=terrain}"
 
 # Ground to cover, as a WGS84 bounding box: west south east north, space
@@ -201,8 +202,9 @@ fi
 
 # Version segment in the class tile URLs. Same job and same rule as
 # TERRAIN_VERSION: tiles are immutable for a year, so a rebuild under a fixed
-# URL is invisible. The Worker strips it and reads terrain-class/{z}/{x}/{y}.png
-# from the bucket, so a bump needs no Worker deploy.
+# URL is invisible. v1 and v2 live at the unversioned terrain-class/{z}/{x}/{y}.png;
+# from v3 each version has its own prefix, terrain-class/<version>/ (SNOW-1505),
+# which upload.sh writes and the Worker reads.
 #
 # Bump it for any change to the pixel contract or the kernel, not only to the
 # heights underneath: a pixel decoded under the wrong contract is a wrong slope
