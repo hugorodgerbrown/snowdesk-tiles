@@ -568,7 +568,7 @@ def test_tar_member_streamed_stops_at_the_member() -> None:
 
 
 def test_coverage_falls_back_to_the_origin_when_the_mirror_lacks_a_source(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     import urllib.error
 
@@ -581,10 +581,15 @@ def test_coverage_falls_back_to_the_origin_when_the_mirror_lacks_a_source(
         opened.append(url)
         return io.BytesIO(_tarball({"coverage.gpkg": b"not a gpkg"}))
 
+    def no_gdal(*args: Any, **kwargs: Any) -> None:
+        """Stand in for ogr2ogr, so the test needs no GDAL."""
+        raise subprocess.CalledProcessError(1, "ogr2ogr")
+
+    monkeypatch.setattr(subprocess, "run", no_gdal)
     entries = {
         "chzh": {"tarball_url": "https://download.mapterhorn.com/sources/chzh.tar"}
     }
-    with pytest.raises(subprocess.CalledProcessError):  # ogr2ogr rejects the bytes
+    with pytest.raises(subprocess.CalledProcessError):
         mapterhorn_sources.coverage_features(
             entries, ALPS, tmp_path, fetch, opener=opener
         )
