@@ -1,0 +1,9 @@
+{
+  "_comment": "SNOW-1505. Border crossings where datum_check.py compares swissALTI3D's heights with the national model's across the border, before the terrain build downloads anything in bulk. Each point is the road crossing, on the border; the border itself is found from where swissALTI3D's data stops, so no bearing is needed. Flat ground on purpose: only cells under 1 degree count.",
+  "crossings": [
+    {"name": "Diepoldsau-Hohenems (CH/AT)", "lon": 9.655, "lat": 47.386, "foreign": "AT"},
+    {"name": "Kreuzlingen-Konstanz (CH/DE)", "lon": 9.172, "lat": 47.656, "foreign": "DE"},
+    {"name": "Meyrin-Saint-Genis-Pouilly (CH/FR)", "lon": 6.050, "lat": 46.243, "foreign": "FR"},
+    {"name": "Stabio-Gaggiolo (CH/IT)", "lon": 8.915, "lat": 45.850, "foreign": "IT"}
+  ]
+}
