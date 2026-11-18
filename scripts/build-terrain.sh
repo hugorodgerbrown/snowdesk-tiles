@@ -159,6 +159,20 @@ if [ "$mapterhorn" = 1 ]; then
     echo "==> Mapterhorn attribution and coverage"
     curl -fsS "$TERRAIN_MAPTERHORN_ATTRIBUTION" -o "${m_dir}/attribution.json"
     coverage=$TERRAIN_MAPTERHORN_COVERAGE
+    if [ "$coverage" = tarballs ]; then
+        # Mapterhorn publishes no single coverage file; each source tarball
+        # opens with one. Read just those, over HTTP ranges.
+        # Rebuilt every run, from the GeoPackages kept in coverage/, so a
+        # changed bbox never reuses polygons filtered to the old one.
+        coverage="${m_dir}/coverage.geojson"
+        # shellcheck disable=SC2086 - four numbers
+        "$python" scripts/mapterhorn_sources.py coverage \
+            --attribution "${m_dir}/attribution.json" \
+            --bbox $TERRAIN_MAPTERHORN_BBOX \
+            --work "${m_dir}/coverage" \
+            --out "${coverage}.part"
+        mv "${coverage}.part" "$coverage"
+    fi
     case $coverage in
         http://* | https://*)
             fetched="${m_dir}/$(basename "${coverage%%\?*}")"
@@ -167,15 +181,7 @@ if [ "$mapterhorn" = 1 ]; then
             ;;
     esac
     if [ ! -s "$coverage" ]; then
-        cat >&2 <<EOF
-error: no Mapterhorn coverage file at ${coverage}
-
-Find what Mapterhorn publishes beside attribution.json with
-
-    python3 scripts/mapterhorn_sources.py probe
-
-and point TERRAIN_MAPTERHORN_COVERAGE at it (a path or a URL).
-EOF
+        echo "error: no Mapterhorn coverage file at ${coverage}" >&2
         exit 1
     fi
     case $coverage in
@@ -184,7 +190,7 @@ EOF
                 echo "error: ogr2ogr not found — install GDAL to read ${coverage}" >&2
                 exit 1
             }
-            coverage_json="${m_dir}/coverage.geojson"
+            coverage_json="${m_dir}/coverage-converted.geojson"
             ogr2ogr -f GeoJSON -t_srs EPSG:4326 -overwrite "$coverage_json" "$coverage"
             ;;
         *) coverage_json=$coverage ;;

@@ -12,8 +12,13 @@ GLO-30-only ground stays absent (204).
 This module makes the choices that clipping turns on. Stdlib plus numpy:
 
 * ``probe`` prints what ``download.mapterhorn.com`` lists beside
-  ``attribution.json``, so an operator can find the coverage file and confirm
-  the attribution's shape before a build relies on it.
+  ``attribution.json``, so an operator can confirm the attribution's shape.
+* ``coverage`` assembles the per-source coverage polygons. Mapterhorn
+  publishes no single coverage file: each source's tarball opens with a
+  ``coverage.gpkg``, so this reads just that member of each tarball over HTTP
+  ranges (a few hundred KB, never the GB of rasters behind it), reprojects it
+  to EPSG:4326 with ogr2ogr, keeps what meets the bbox and writes one GeoJSON
+  with each feature's ``source`` set.
 * ``select`` reads the per-source coverage polygons (GeoJSON; build-terrain.sh
   converts a GeoPackage with ogr2ogr first), drops GLO-30, keeps the sources
   whose polygon meets the area, and writes the clip file gdalwarp cuts with and
@@ -29,6 +34,9 @@ This module makes the choices that clipping turns on. Stdlib plus numpy:
 
 Usage:
     python scripts/mapterhorn_sources.py probe
+    python scripts/mapterhorn_sources.py coverage \
+        --attribution attribution.json --bbox 5.0 43.7 16.6 48.4 \
+        --work work/coverage --out coverage.geojson
     python scripts/mapterhorn_sources.py select --coverage cov.geojson \
         --attribution attribution.json --area dem/supported-area.geojson \
         --bbox 5.0 43.7 16.6 48.4 --clip clip.geojson --credits credits.json
@@ -44,7 +52,10 @@ import argparse
 import json
 import math
 import re
+import shutil
+import subprocess
 import sys
+import tarfile
 import urllib.request
 from collections.abc import Callable, Iterable, Sequence
 from pathlib import Path
@@ -572,6 +583,125 @@ def probe(origin: str, fetch: Callable[[str], bytes] = fetch_bytes) -> list[str]
     return lines
 
 
+# --- coverage ---------------------------------------------------------------
+
+#: The tarball member holding a source's coverage polygons.
+COVERAGE_MEMBER = "coverage.gpkg"
+
+#: How many tar headers to walk before giving up on finding it. Mapterhorn's
+#: tarballs put LICENSE.pdf, metadata.json, bounds.csv and coverage.gpkg first.
+MAX_TAR_HEADERS = 16
+
+TAR_BLOCK = 512
+
+
+def fetch_range(url: str, start: int, end: int) -> bytes:
+    """Return bytes ``start``..``end`` (inclusive) of an http(s) URL."""
+    if not url.startswith(("http://", "https://")):
+        raise ValueError(f"refusing to fetch non-HTTP url: {url}")
+    request = urllib.request.Request(  # noqa: S310 - scheme checked above
+        url, headers={"User-Agent": "snowdesk-tiles", "Range": f"bytes={start}-{end}"}
+    )
+    with urllib.request.urlopen(request, timeout=120) as response:  # noqa: S310 - checked
+        if response.status != 206:
+            raise OSError(f"{url}: no range support (HTTP {response.status})")
+        body: bytes = response.read()
+    return body
+
+
+def tar_member(
+    url: str,
+    name: str,
+    fetch: Callable[[str, int, int], bytes] = fetch_range,
+) -> bytes:
+    """Return one member of a remote uncompressed tarball, reading headers only.
+
+    Walks the archive header by header with range requests until ``name``
+    turns up, then fetches just that member's bytes.
+    """
+    offset = 0
+    long_name: str | None = None
+    for _ in range(MAX_TAR_HEADERS):
+        header = fetch(url, offset, offset + TAR_BLOCK - 1)
+        if len(header) < TAR_BLOCK or header == bytes(TAR_BLOCK):
+            break
+        info = tarfile.TarInfo.frombuf(header, "utf-8", "surrogateescape")
+        data = offset + TAR_BLOCK
+        offset = data + math.ceil(info.size / TAR_BLOCK) * TAR_BLOCK
+        if info.type == tarfile.GNUTYPE_LONGNAME:
+            long_name = fetch(url, data, data + info.size - 1).rstrip(b"\0").decode()
+            continue
+        if info.type in (tarfile.XHDTYPE, tarfile.XGLTYPE):
+            continue
+        member = long_name or info.name
+        long_name = None
+        if member == name or member.endswith("/" + name):
+            return fetch(url, data, data + info.size - 1) if info.size else b""
+    raise ValueError(f"{url}: no {name} in its first {MAX_TAR_HEADERS} members")
+
+
+def coverage_features(
+    entries: dict[str, dict[str, Any]],
+    bbox: Box,
+    work: Path,
+    fetch: Callable[[str, int, int], bytes] = fetch_range,
+    ogr2ogr: str = "ogr2ogr",
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Return every national source's coverage features meeting ``bbox``.
+
+    Each feature's properties are replaced by ``{"source": <id>}``. GLO-30 is
+    skipped without a fetch. Returns the features and the ids that met the box.
+    Downloaded GeoPackages are kept in ``work`` so a rerun fetches nothing.
+    """
+    work.mkdir(parents=True, exist_ok=True)
+    features: list[dict[str, Any]] = []
+    met: list[str] = []
+    for source in sorted(entries):
+        if is_glo30(source):
+            continue
+        url = entries[source].get("tarball_url")
+        if not url:
+            raise ValueError(f"attribution for {source} has no tarball_url")
+        gpkg = work / f"{source}.gpkg"
+        if not gpkg.exists():
+            part = gpkg.with_suffix(".part")
+            part.write_bytes(tar_member(str(url), COVERAGE_MEMBER, fetch))
+            part.rename(gpkg)
+        out = work / f"{source}.geojson"
+        # The GeoJSON driver cannot overwrite a layer in place.
+        out.unlink(missing_ok=True)
+        # A fixed argument list, no shell: the paths are this function's own.
+        subprocess.run(  # noqa: S603
+            [
+                ogr2ogr,
+                "-f",
+                "GeoJSON",
+                "-t_srs",
+                "EPSG:4326",
+                "-spat",
+                *(repr(v) for v in bbox),
+                "-spat_srs",
+                "EPSG:4326",
+                str(out),
+                str(gpkg),
+            ],
+            check=True,
+        )
+        found = json.loads(out.read_text(encoding="utf-8")).get("features") or []
+        if not found:
+            continue
+        met.append(source)
+        for feature in found:
+            features.append(
+                {
+                    "type": "Feature",
+                    "properties": {"source": source},
+                    "geometry": feature["geometry"],
+                }
+            )
+    return features, met
+
+
 # --- CLI --------------------------------------------------------------------
 
 
@@ -599,6 +729,12 @@ def main(argv: list[str] | None = None) -> int:
 
     p_probe = sub.add_parser("probe", help="list what Mapterhorn publishes")
     p_probe.add_argument("--origin", default=DEFAULT_ORIGIN)
+
+    p_cov = sub.add_parser("coverage", help="assemble the coverage polygons")
+    p_cov.add_argument("--attribution", type=Path, required=True)
+    _add_bbox(p_cov)
+    p_cov.add_argument("--work", type=Path, required=True)
+    p_cov.add_argument("--out", type=Path, required=True)
 
     p_select = sub.add_parser("select", help="write the clip file and credits")
     p_select.add_argument("--coverage", type=Path, required=True)
@@ -642,6 +778,18 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.command == "probe":
         print("\n".join(probe(args.origin)))
+    elif args.command == "coverage":
+        if shutil.which("ogr2ogr") is None:
+            print("error: ogr2ogr not found — install gdal-bin", file=sys.stderr)
+            return 1
+        features, met = coverage_features(
+            attribution_entries(_read(args.attribution)), _bbox(args.bbox), args.work
+        )
+        document = {"type": "FeatureCollection", "features": features}
+        args.out.write_text(json.dumps(document), encoding="utf-8")
+        print(
+            f"==> coverage from {len(met)} sources: {', '.join(met)}", file=sys.stderr
+        )
     elif args.command == "select":
         clip, credits = select(
             _read(args.coverage),
