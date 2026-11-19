@@ -215,10 +215,14 @@ if [ "$mapterhorn" = 1 ]; then
     # move by about one cell (~20 m). Measured on the 18 Nov 2026 coverage:
     # about 7 minutes on 4 cores, 5 MB out, and a 300 m box warps in 4 s.
     echo "==> compacting the clip outline"
+    # Over the fill's bbox and every datum crossing's window, since the check
+    # runs at all of them whatever the bbox.
+    # shellcheck disable=SC2086 - four numbers
+    clip_extent=$("$python" scripts/datum_check.py --print-extent $TERRAIN_MAPTERHORN_BBOX)
     # shellcheck disable=SC2086 - four numbers
     OGR_GEOJSON_MAX_OBJ_SIZE=0 gdal_rasterize -q \
         -burn 1 -ot Byte -init 0 -a_nodata 0 \
-        -te $TERRAIN_MAPTERHORN_BBOX -tr 0.0003 0.0002 \
+        -te $clip_extent -tr 0.0003 0.0002 \
         -co TILED=YES -co COMPRESS=DEFLATE \
         "${m_dir}/clip-full.geojson" "${m_dir}/clip-mask.tif"
     rm -f "${m_dir}/clip-traced.gpkg"

@@ -22,8 +22,10 @@ from datum_check import (  # noqa: E402
     MIN_FLAT_CELLS,
     DatumResult,
     assess,
+    clip_extent,
     crossing_box,
     load_points,
+    main,
     slope_deg,
     strips,
     window,
@@ -168,3 +170,28 @@ def test_every_crossing_window_fetches_the_tiles_it_touches() -> None:
         north = max(tile_lonlat_bounds(x, y, ZOOM)[3] for x, y in tiles)
         assert west <= box[0] and south <= box[1], crossing["name"]
         assert east >= box[2] and north >= box[3], crossing["name"]
+
+
+def test_the_clip_extent_is_the_bbox_when_it_holds_every_crossing() -> None:
+    alps = (5.0, 43.7, 16.6, 48.4)
+
+    assert clip_extent(alps, load_points()) == alps
+
+
+def test_the_clip_extent_widens_to_a_crossing_outside_the_bbox() -> None:
+    # A northern bound of 47.6 leaves Kreuzlingen-Konstanz (47.656) outside.
+    west, south, east, north = clip_extent((5.0, 43.7, 16.6, 47.6), load_points())
+
+    assert (west, south, east) == (5.0, 43.7, 16.6)
+    assert north == pytest.approx(47.656 + 0.004)
+
+
+def test_print_extent_prints_the_box(capsys: pytest.CaptureFixture[str]) -> None:
+    assert main(["--print-extent", "5.0", "43.7", "16.6", "47.6"]) == 0
+
+    assert capsys.readouterr().out.split() == [
+        "5.000000",
+        "43.700000",
+        "16.600000",
+        "47.660000",
+    ]

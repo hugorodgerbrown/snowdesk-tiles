@@ -299,15 +299,45 @@ def load_points(path: Path = POINTS) -> list[dict[str, Any]]:
     return crossings
 
 
+def clip_extent(
+    bbox: tuple[float, float, float, float], crossings: list[dict[str, Any]]
+) -> tuple[float, float, float, float]:
+    """Return the (west, south, east, north) box the compact clip must cover.
+
+    The fill's bbox, widened to every crossing's window: the check runs at
+    every crossing, whatever the bbox, and cuts its foreign side with the clip.
+    """
+    west, south, east, north = bbox
+    for crossing in crossings:
+        w, s, e, n = crossing_box(float(crossing["lon"]), float(crossing["lat"]))
+        west, south = min(west, w), min(south, s)
+        east, north = max(east, e), max(north, n)
+    return west, south, east, north
+
+
 def main(argv: list[str] | None = None) -> int:
     """CLI entry point — check every crossing; exit 1 if any fails."""
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--points", type=Path, default=POINTS)
-    parser.add_argument("--work", type=Path, required=True)
-    parser.add_argument("--dem-url", required=True, help="dem/<version> base URL")
-    parser.add_argument("--clip", type=Path, required=True, help="the build's clip")
+    parser.add_argument(
+        "--print-extent",
+        type=float,
+        nargs=4,
+        metavar=("WEST", "SOUTH", "EAST", "NORTH"),
+        help="print the box the compact clip must cover for this bbox, and exit",
+    )
+    parser.add_argument("--work", type=Path)
+    parser.add_argument("--dem-url", help="dem/<version> base URL")
+    parser.add_argument("--clip", type=Path, help="the build's clip")
     parser.add_argument("--gsd", type=float, default=2.0)
     args = parser.parse_args(argv)
+
+    if args.print_extent:
+        box = clip_extent(tuple(args.print_extent), load_points(args.points))
+        print(" ".join(f"{v:.6f}" for v in box))
+        return 0
+    if args.work is None or args.dem_url is None or args.clip is None:
+        parser.error("--work, --dem-url and --clip are required to run the check")
 
     if shutil.which("gdalwarp") is None:
         print("error: gdalwarp not found — install GDAL", file=sys.stderr)
