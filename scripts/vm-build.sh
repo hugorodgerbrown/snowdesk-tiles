@@ -246,9 +246,24 @@ need_gb=100
 # about 1.5% of a z18 regional archive's bytes and 6% of a z17 one's, which over
 # the seven Alpine and Pyrenean archives comes to roughly 20-40 GB.
 [ "$target" = "dem" ] && need_gb=80
+# A rerun resumes, so the space an earlier run already filled under work/ and
+# dist/ counts towards the need: those files are reused or replaced, not added
+# to. Without this a resumed terrain build, holding ~350 GB of finished
+# rasters, is refused for having "only" the ~290 GB it still has free.
 free_gb=$(df -BG --output=avail . | tail -1 | tr -dc '0-9')
-if [ "${free_gb:-0}" -lt "$need_gb" ]; then
-    echo "error: ${free_gb} GB free, need ~${need_gb} GB for the ${target} build" >&2
+held_gb=0
+held_dirs=()
+for dir in work "$DIST_DIR"; do
+    [ -d "$dir" ] && held_dirs+=("$dir")
+done
+if [ "${#held_dirs[@]}" -gt 0 ]; then
+    echo "==> measuring what earlier runs left in ${held_dirs[*]}"
+    held_gb=$(du -s -BG "${held_dirs[@]}" | awk '{s += $1} END {print s + 0}')
+fi
+have_gb=$(( ${free_gb:-0} + held_gb ))
+echo "==> disk: ${free_gb} GB free + ${held_gb} GB from earlier runs = ${have_gb} GB, need ~${need_gb} GB"
+if [ "$have_gb" -lt "$need_gb" ]; then
+    echo "error: ${have_gb} GB available (${free_gb} GB free + ${held_gb} GB from earlier runs), need ~${need_gb} GB for the ${target} build" >&2
     exit 1
 fi
 
