@@ -357,22 +357,29 @@ elif [ "$target" = "terrain" ]; then
     stage "checking the new tiles before uploading" \
         "A seam profile or a no-data point in the new tiles is not what verify.sh will accept. Nothing has been uploaded." \
         "Send Claude the box and the lines above it that start with FAIL."
-    if [ ! -s "$gap_file" ]; then
-        echo "error: ${gap_file} is missing; build-terrain.sh writes it after the cut" >&2
-        exit 1
-    fi
-    echo "==> checking no-data points and summits in ${DIST_DIR}/${TERRAIN_DIR}"
-    python3 scripts/terrain_grid.py places \
-        --url "${DIST_DIR}/${TERRAIN_DIR}" --expect "$gap_file"
-    while IFS= read -r name; do
-        echo "==> checking the seam profile ${name}"
-        python3 scripts/terrain_grid.py profile "$name" \
+    # A swissALTI3D-only build (TERRAIN_MAPTERHORN_BBOX empty) has no fill, no
+    # seams and no verify-gap.json; it checks only the no-data points.
+    if [ -z "${TERRAIN_MAPTERHORN_BBOX:-}" ]; then
+        echo "==> checking no-data points in ${DIST_DIR}/${TERRAIN_DIR} (swissALTI3D only: no seams)"
+        python3 scripts/terrain_grid.py places --url "${DIST_DIR}/${TERRAIN_DIR}"
+    else
+        if [ ! -s "$gap_file" ]; then
+            echo "error: ${gap_file} is missing; build-terrain.sh writes it after the cut" >&2
+            exit 1
+        fi
+        echo "==> checking no-data points and summits in ${DIST_DIR}/${TERRAIN_DIR}"
+        python3 scripts/terrain_grid.py places \
             --url "${DIST_DIR}/${TERRAIN_DIR}" --expect "$gap_file"
-    done < <(python3 -c '
+        while IFS= read -r name; do
+            echo "==> checking the seam profile ${name}"
+            python3 scripts/terrain_grid.py profile "$name" \
+                --url "${DIST_DIR}/${TERRAIN_DIR}" --expect "$gap_file"
+        done < <(python3 -c '
 import json
 for p in json.load(open("scripts/verify_points.json"))["profiles"]:
     print(p["name"])
 ')
+    fi
 
     # upload.sh here, not a bespoke copy: this is tens of thousands of small
     # objects, so `sync` is doing real work — an interrupted upload resumes and
