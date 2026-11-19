@@ -491,9 +491,26 @@ def seam_from_swiss(distances: Sequence[float], swiss_valid: Sequence[bool]) -> 
         if swiss_valid[i] and not swiss_valid[i + 1]
     ]
     if not transitions:
+        length = distances[-1] - distances[0]
+        if all(swiss_valid):
+            raise ValueError(
+                f"swissALTI3D does not stop anywhere along the profile: it "
+                f"covers all {length:g} m of it. swissALTI3D runs past the "
+                "national border, so the line is too short to reach where it "
+                "ends. Lengthen the profile (length_m in "
+                "scripts/verify_points.json)"
+            )
+        if not any(swiss_valid):
+            raise ValueError(
+                f"swissALTI3D does not stop anywhere along the profile: none of "
+                f"its {length:g} m has a Swiss height. Either the profile's "
+                "centre is not on the Swiss border, or the Swiss warp is empty "
+                "there"
+            )
         raise ValueError(
-            "swissALTI3D does not stop anywhere along the profile — check its "
-            "centre is on the border and its bearing points out of Switzerland"
+            "swissALTI3D does not stop anywhere along the profile: it starts "
+            "partway along instead. The bearing points into Switzerland, not "
+            "out of it; turn it round by 180 degrees in scripts/verify_points.json"
         )
     return min(transitions, key=abs)
 
@@ -912,7 +929,10 @@ def _verify_gap(args: argparse.Namespace) -> dict[str, Any]:
     for name, points in samples.items():
         flags = valid[offset : offset + len(points)]
         offset += len(points)
-        profiles[name] = profile_expectations(clip, area, points, flags)
+        try:
+            profiles[name] = profile_expectations(clip, area, points, flags)
+        except ValueError as error:
+            raise ValueError(f"seam profile {name!r}: {error}") from error
     return {"gap": gap, "profiles": profiles}
 
 

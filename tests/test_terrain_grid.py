@@ -553,7 +553,7 @@ def test_the_seam_profiles_are_theodul_and_piz_buin() -> None:
     assert (theodul["lon"], theodul["lat"]) == (7.711, 45.944)
     assert (buin["lon"], buin["lat"]) == (10.118, 46.844)
     for profile in profiles.values():
-        assert profile["length_m"] == 2000
+        assert profile["length_m"] == 10000
         assert profile["step_m"] == 5
         assert profile["max_step_m"] == 3.0
 
@@ -566,7 +566,7 @@ def test_profile_points_cli_lists_every_sample(
     assert main(["profile-points"]) == 0
 
     lines = capsys.readouterr().out.splitlines()
-    assert len(lines) == 2 * 401
+    assert len(lines) == 2 * 2001
     name, rest = lines[0].split("\t")
     assert name == "Theodul Pass (CH/IT)"
     assert len(rest.split()) == 5

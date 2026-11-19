@@ -464,7 +464,11 @@ def lonlat_extent(
 # straight fit rather than the two nearest cells, because a slope that carries
 # on across the border would otherwise read as a step one cell's rise high.
 
-#: Profile defaults: a 2 km line, sampled every 5 m — the cell size.
+#: Profile defaults: a 2 km line, sampled every 5 m — the cell size. The two
+#: listed profiles override the length with 10 km (5 km each side of the
+#: border): swissALTI3D runs past the national border, and on 19 Nov 2026
+#: it covered the whole of a 2 km line at both Theodul Pass and Piz Buin.
+#: The datum check found it stopping up to 1.45 km past a crossing.
 PROFILE_LENGTH_M = 2000.0
 PROFILE_STEP_M = 5.0
 SEAM_FIT_M = 50.0
