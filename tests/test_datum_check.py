@@ -20,8 +20,10 @@ sys.path.insert(0, str(ROOT / "scripts"))
 from datum_check import (  # noqa: E402
     MAX_DIFFERENCE_M,
     MIN_FLAT_CELLS,
+    SEARCH_HALF_M,
     DatumResult,
     assess,
+    assess_nearest_seam,
     clip_extent,
     crossing_box,
     load_points,
@@ -30,6 +32,7 @@ from datum_check import (  # noqa: E402
     strips,
     window,
 )
+from terrain_grid import lonlat_to_grid  # noqa: E402
 from terrarium import ZOOM, tile_lonlat_bounds, tiles_for_box  # noqa: E402
 
 SIZE = 60  # the 300 m window at 5 m
@@ -183,7 +186,7 @@ def test_the_clip_extent_widens_to_a_crossing_outside_the_bbox() -> None:
     west, south, east, north = clip_extent((5.0, 43.7, 16.6, 47.6), load_points())
 
     assert (west, south, east) == (5.0, 43.7, 16.6)
-    assert north == pytest.approx(47.656 + 0.004)
+    assert north == pytest.approx(47.656 + 0.027)
 
 
 def test_print_extent_prints_the_box(capsys: pytest.CaptureFixture[str]) -> None:
@@ -193,5 +196,93 @@ def test_print_extent_prints_the_box(capsys: pytest.CaptureFixture[str]) -> None
         "5.000000",
         "43.700000",
         "16.600000",
-        "47.660000",
+        "47.683000",
     ]
+
+
+SEARCH = 200  # a 1 km search grid at 5 m: enough for these synthetic seams
+
+
+def search_grids(
+    seam_col: int, offset_m: float = 0.0, steep_rows: int = 0
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return a search grid where swissALTI3D stops at ``seam_col``.
+
+    The national model is everywhere, swissALTI3D west of the seam only, as
+    where swissALTI3D carries on past the border. The first ``steep_rows``
+    rows are a 45 degree slope.
+    """
+    ground = np.full((SEARCH, SEARCH), 412.0)
+    cols = np.arange(SEARCH, dtype=np.float64)[None, :] * 5.0
+    ground[:steep_rows, :] = 412.0 + np.broadcast_to(cols, (steep_rows, SEARCH))
+    swiss = ground.copy()
+    swiss[:, seam_col:] = np.nan
+    return swiss, ground + offset_m
+
+
+def test_the_seam_is_found_away_from_the_crossing() -> None:
+    # The seam is 40 cells (200 m) east of the centre: outside a 300 m window
+    # round the crossing, which is what stopped the VM run on 19 Nov 2026.
+    swiss, foreign = search_grids(seam_col=SEARCH // 2 + 40, offset_m=0.6)
+
+    result = assess_nearest_seam(swiss, foreign)
+
+    assert result.ok, result.reason
+    assert result.difference_m == pytest.approx(-0.6)
+    assert "at the seam 19" in result.reason or "at the seam 20" in result.reason
+
+
+def test_a_metre_and_a_half_at_the_seam_fails() -> None:
+    swiss, foreign = search_grids(seam_col=SEARCH // 2 + 40, offset_m=1.5)
+
+    result = assess_nearest_seam(swiss, foreign)
+
+    assert not result.ok
+    assert "more than 1 m" in result.reason
+
+
+def test_a_steep_nearest_seam_moves_on_to_a_flat_one() -> None:
+    # The seam runs north to south; its northern 140 rows (700 m) are steep,
+    # so the stretch nearest the centre has no flat cells.
+    swiss, foreign = search_grids(seam_col=SEARCH // 2, offset_m=0.6, steep_rows=140)
+
+    result = assess_nearest_seam(swiss, foreign)
+
+    assert result.ok, result.reason
+
+
+def test_swiss_data_over_the_whole_search_box_says_so() -> None:
+    ground = np.full((SEARCH, SEARCH), 412.0)
+
+    result = assess_nearest_seam(ground, ground.copy())
+
+    assert not result.ok
+    assert "covers the whole search box" in result.reason
+
+
+def test_a_seam_with_no_national_model_beyond_it_says_so() -> None:
+    swiss, foreign = search_grids(seam_col=SEARCH // 2)
+    foreign[:] = np.nan
+
+    result = assess_nearest_seam(swiss, foreign)
+
+    assert not result.ok
+    assert "outside every national model" in result.reason
+
+
+def test_every_crossing_box_holds_its_search_grid() -> None:
+    # The box is fetched in lon/lat, the grid is cut in EPSG:3035: no point on
+    # the box's edge may fall inside the grid, or the grid's corners go unfetched.
+    for crossing in load_points():
+        lon, lat = crossing["lon"], crossing["lat"]
+        west, south, east, north = window(lon, lat, SEARCH_HALF_M)
+        b_west, b_south, b_east, b_north = crossing_box(lon, lat)
+        for t in np.linspace(0.0, 1.0, 101):
+            for x, y in (
+                (b_west + t * (b_east - b_west), b_south),
+                (b_west + t * (b_east - b_west), b_north),
+                (b_west, b_south + t * (b_north - b_south)),
+                (b_east, b_south + t * (b_north - b_south)),
+            ):
+                e, n = lonlat_to_grid(x, y)
+                assert not (west < e < east and south < n < north), crossing["name"]
