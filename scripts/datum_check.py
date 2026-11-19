@@ -7,12 +7,17 @@ height reference, and its catalogue does not record which. The grid puts
 swissALTI3D (LN02) beside those models at every border, so a model on a
 different reference would show as a step along the border, everywhere.
 
-**The threshold is 1.0 m, and why.** The Alpine national datums — LN02,
+**The threshold is 3.0 m, and why.** The Alpine national datums — LN02,
 NGF-IGN69, the Austrian and Italian national heights, DHHN2016 — are all
 orthometric, and differ from one another by decimetres. The failure worth
 stopping for is a model on ellipsoidal heights, which would sit tens of metres
-off (the geoid is ~50 m above the ellipsoid here). A metre lies well between
-the two. The ground compared is flat — under 1 degree — so the natural rise
+off (the geoid is ~47 m above the ellipsoid here). On top of the datums, the
+national models disagree with swissALTI3D by their own accuracy: measured on
+the VM on 19 Nov 2026, +0.63 m at Diepoldsau, +0.48 m at Konstanz, +0.07 m at
+Meyrin and +1.55 m at Stabio, where a regional Italian model meets swisstopo's
+2 m one. The first threshold, 1 m, stopped the build on Stabio; Hugo chose 3 m,
+which passes model disagreement and still stops an ellipsoidal model fifteen
+times over. The ground compared is flat — under 1 degree — so the natural rise
 across the two 25 m strips (50 m at most) is under 0.9 m, and a true datum
 step is not hidden in a slope.
 
@@ -31,7 +36,7 @@ coverage polygons the build will clip to. Where that stretch is too steep, the
 next seam point at least 200 m along is tried, up to 25 of them; a stretch
 that has enough flat cells decides, pass or fail. Only cells with a slope under 1
 degree count, each side needs 20 of them, and the mean heights must agree
-within 1.0 m. Too few flat cells fails loudly: a check that could not look is
+within 3.0 m. Too few flat cells fails loudly: a check that could not look is
 not a check that passed. There is no flag to skip it.
 
 Only the few swissALTI3D squares and z14 tiles each window needs are fetched.
@@ -66,7 +71,7 @@ from terrarium import ZOOM, decode_tiles, tile_path, tiles_for_box
 POINTS = Path(__file__).resolve().parent / "datum_points.json"
 
 #: See the module docstring for each of these.
-MAX_DIFFERENCE_M = 1.0
+MAX_DIFFERENCE_M = 3.0
 MAX_SLOPE_DEG = 1.0
 MIN_FLAT_CELLS = 20
 STRIP_M = 25.0
@@ -371,6 +376,33 @@ def check_crossing(
     return assess_nearest_seam(swiss, foreign)
 
 
+#: What each kind of failure means, and what to do, printed under the results.
+ADVICE = {
+    "step": (
+        f"\n  What it means: at a crossing marked FAIL above, the national model's "
+        f"heights differ from\n  swisstopo's by more than {MAX_DIFFERENCE_M:g} m on "
+        "flat ground. A model on the wrong height system\n  would be about 47 m off; "
+        "a few metres is the model's own accuracy.\n  What to do: send Claude the "
+        "four datum lines. Do not edit anything on the server."
+    ),
+    "no-look": (
+        "\n  What it means: at a crossing marked FAIL above, the check could not "
+        "find enough flat ground\n  on both sides of where swissALTI3D's data "
+        "stops, so it could not compare. That is a\n  problem with where the "
+        "crossing is, not with the heights.\n  What to do: send Claude the four "
+        "datum lines. The fix is a different crossing in\n  "
+        "scripts/datum_points.json."
+    ),
+    "error": (
+        "\n  What it means: at a crossing marked FAIL above, a download or a GDAL "
+        "step failed, and the\n  message says which. A URL or 'timed out' in it "
+        "is the network; a gdalwarp command is GDAL.\n  What to do: run the same "
+        "command again, since downloads resume. If it fails the same\n  way twice, "
+        "send Claude the four datum lines."
+    ),
+}
+
+
 def load_points(path: Path = POINTS) -> list[dict[str, Any]]:
     """Return the crossings in datum_points.json."""
     crossings: list[dict[str, Any]] = json.loads(path.read_text(encoding="utf-8"))[
@@ -423,24 +455,30 @@ def main(argv: list[str] | None = None) -> int:
         print("error: gdalwarp not found — install GDAL", file=sys.stderr)
         return 1
     failed = 0
+    kinds: set[str] = set()
     for crossing in load_points(args.points):
         try:
             result = check_crossing(
                 crossing, args.work, args.dem_url, args.clip, args.gsd
             )
         except (RuntimeError, OSError, subprocess.CalledProcessError) as error:
-            print(f"  FAIL  datum: {crossing['name']}: {error}")
+            print(f"  FAIL  datum: {crossing['name']}: {error}", flush=True)
             failed += 1
+            kinds.add("error")
             continue
         status = "ok  " if result.ok else "FAIL"
-        print(f"  {status}  datum: {crossing['name']}: {result.reason}")
-        failed += 0 if result.ok else 1
+        print(f"  {status}  datum: {crossing['name']}: {result.reason}", flush=True)
+        if not result.ok:
+            failed += 1
+            kinds.add("step" if result.swiss_mean_m is not None else "no-look")
     if failed:
         print(
             f"error: {failed} crossing(s) failed the datum check — the build stops "
-            "before any bulk download",
+            "before any bulk download, and nothing was uploaded",
             file=sys.stderr,
         )
+        for kind in sorted(kinds):
+            print(ADVICE[kind], file=sys.stderr)
         return 1
     return 0
 

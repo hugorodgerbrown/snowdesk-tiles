@@ -11,7 +11,7 @@
 # ground only Copernicus GLO-30 covers stays absent (204). swissALTI3D is warped
 # exactly as before and composited last, so every Swiss height is unchanged.
 # Before anything is downloaded in bulk, datum_check.py compares heights across
-# four border crossings and stops the build on a step over a metre.
+# four border crossings and stops the build on a step over 3 m.
 #
 #     ./scripts/build-terrain.sh
 #     TERRAIN_BBOX="7.70 45.98 7.80 46.05" ./scripts/build-terrain.sh   # smoke test
