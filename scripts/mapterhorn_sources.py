@@ -21,9 +21,9 @@ This module makes the choices that clipping turns on. Stdlib plus numpy:
   with each feature's ``source`` set.
 * ``select`` reads the per-source coverage polygons (GeoJSON; build-terrain.sh
   converts a GeoPackage with ogr2ogr first), drops GLO-30, keeps the sources
-  whose polygon meets the area, and writes the clip file gdalwarp cuts with and
-  the credits grid.json publishes. Polygons are used as published, with no
-  inward buffer.
+  whose polygon meets the area, and writes their polygons as published (no
+  inward buffer) and the credits grid.json publishes. build-terrain.sh traces
+  those polygons into the compact outline gdalwarp cuts with.
 * ``manifest`` widens the swissALTI3D fetch manifest to the Mapterhorn area and
   records the Mapterhorn release, so the grid extent covers both and
   ``grid.json`` can say where each source's heights came from.
@@ -296,7 +296,7 @@ def select(
     """Return the clip FeatureCollection and the credits for the Mapterhorn fill.
 
     The clip holds every non-GLO-30 coverage polygon that meets the area,
-    unchanged; gdalwarp unions them as its cutline. Credits are one per source
+    unchanged; build-terrain.sh unions them into its cutline. Credits are one per source
     kept, sorted by id, each from attribution.json. ``native_resolution_m`` is
     the coarsest kept model's — the honest figure for a mosaic of them.
     """
