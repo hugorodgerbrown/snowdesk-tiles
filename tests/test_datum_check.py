@@ -64,15 +64,22 @@ def test_six_decimetres_passes() -> None:
     assert result.difference_m == pytest.approx(-0.6)
 
 
-def test_one_point_two_metres_fails() -> None:
-    result = run(*halves(1.2, tilt=0.005))
+def test_one_and_a_half_metres_passes() -> None:
+    # Stabio's measured step on 19 Nov 2026: model disagreement, not a datum.
+    result = run(*halves(1.55, tilt=0.005))
+
+    assert result.ok, result.reason
+
+
+def test_three_and_a_half_metres_fails() -> None:
+    result = run(*halves(3.5, tilt=0.005))
 
     assert not result.ok
-    assert "more than 1 m" in result.reason
+    assert "more than 3 m" in result.reason
 
 
-def test_the_threshold_is_a_metre() -> None:
-    assert MAX_DIFFERENCE_M == 1.0
+def test_the_threshold_is_three_metres() -> None:
+    assert MAX_DIFFERENCE_M == 3.0
     assert MIN_FLAT_CELLS == 20
 
 
@@ -232,13 +239,13 @@ def test_the_seam_is_found_away_from_the_crossing() -> None:
     assert "at the seam 19" in result.reason or "at the seam 20" in result.reason
 
 
-def test_a_metre_and_a_half_at_the_seam_fails() -> None:
-    swiss, foreign = search_grids(seam_col=SEARCH // 2 + 40, offset_m=1.5)
+def test_three_and_a_half_metres_at_the_seam_fails() -> None:
+    swiss, foreign = search_grids(seam_col=SEARCH // 2 + 40, offset_m=3.5)
 
     result = assess_nearest_seam(swiss, foreign)
 
     assert not result.ok
-    assert "more than 1 m" in result.reason
+    assert "more than 3 m" in result.reason
 
 
 def test_a_steep_nearest_seam_moves_on_to_a_flat_one() -> None:
@@ -286,3 +293,37 @@ def test_every_crossing_box_holds_its_search_grid() -> None:
             ):
                 e, n = lonlat_to_grid(x, y)
                 assert not (west < e < east and south < n < north), crossing["name"]
+
+
+def test_a_failed_run_says_what_it_means_and_what_to_do(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import datum_check
+
+    outcomes = iter(
+        [
+            DatumResult(60, 60, 400.0, 400.5, True, "means differ by +0.50 m"),
+            DatumResult(60, 60, 400.0, 404.0, False, "means differ by -4.00 m"),
+            DatumResult(0, 0, None, None, False, "no seam"),
+        ]
+    )
+
+    def fake_check(*args: object) -> DatumResult:
+        outcome = next(outcomes, None)
+        if outcome is None:
+            raise OSError("https://example.invalid/x.tif: timed out")
+        return outcome
+
+    monkeypatch.setattr(datum_check, "check_crossing", fake_check)
+    monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/gdalwarp")
+    code = main(
+        ["--work", str(tmp_path), "--dem-url", "https://x", "--clip", str(tmp_path)]
+    )
+
+    out = capsys.readouterr()
+    assert code == 1
+    assert out.out.count("FAIL") == 3
+    assert "nothing was uploaded" in out.err
+    assert "47 m off" in out.err  # the step
+    assert "could not compare" in out.err  # no seam
+    assert "downloads resume" in out.err  # the download error

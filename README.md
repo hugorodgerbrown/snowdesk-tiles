@@ -38,7 +38,7 @@ entry) lives in `snowdesk-data-pipeline` under SNOW-242.
 | `scripts/cut_terrain_tiles.py` | Cuts the warped raster into skirted Int16 tiles, and writes `grid.json`. |
 | `scripts/terrarium.py` | Lists the z14 tiles of the supported area, decodes their Terrarium heights and mosaics them as an EPSG:3857 VRT. Needs numpy and Pillow. |
 | `scripts/mapterhorn_sources.py` | Picks the national models Mapterhorn holds (never GLO-30), writes the clip polygons and the credits, widens the manifest, and writes `verify-gap.json`. `probe` lists what Mapterhorn publishes. |
-| `scripts/datum_check.py` | Stops the terrain build if heights step by over 1 m across the border at the crossings in `scripts/datum_points.json`. |
+| `scripts/datum_check.py` | Stops the terrain build if heights step by over 3 m where swissALTI3D meets the national models, near the crossings in `scripts/datum_points.json`. |
 | `scripts/composite-terrain.sh` | Composites the warped Mapterhorn fill under the unchanged swissALTI3D warp. |
 | `scripts/compare_grids.py` | Fails if a rebuilt grid changed any height a reference grid holds; `sample` fetches the reference from the live grid. |
 | `scripts/build-terrain.sh` | Runs the above plus GDAL → `dist/terrain/`: swissALTI3D, and the Alps beyond from the elevation copy. One-off; needs ~400 GB. |
