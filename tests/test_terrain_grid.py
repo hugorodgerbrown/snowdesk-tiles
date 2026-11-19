@@ -10,6 +10,7 @@ geometry and the encoding rather than to exercise the code.
 from __future__ import annotations
 
 import json
+import struct
 import subprocess
 import sys
 from pathlib import Path
@@ -570,3 +571,105 @@ def test_profile_points_cli_lists_every_sample(
     name, rest = lines[0].split("\t")
     assert name == "Theodul Pass (CH/IT)"
     assert len(rest.split()) == 5
+
+
+# --- Checking a local tile tree before the upload ------------------------------
+
+
+def write_tile_at(root: Path, lon: float, lat: float, metres: float) -> None:
+    """Write a tile holding ``metres`` in every cell, under (lon, lat)."""
+    cell = cell_for(*lonlat_to_grid(lon, lat))
+    folder = root / str(cell.tile_x)
+    folder.mkdir(parents=True, exist_ok=True)
+    value = encode_height(metres)
+    (folder / f"{cell.tile_y}.s16").write_bytes(
+        struct.pack(f"<{STORED_CELLS * STORED_CELLS}h", *[value] * STORED_CELLS**2)
+    )
+
+
+def test_a_local_tree_reads_like_the_origin(tmp_path: Path) -> None:
+    from terrain_grid import read_local_tile, sample_heights, tile_reader
+
+    write_tile_at(tmp_path, 12.69444, 47.07472, 3790.0)
+
+    heights = sample_heights(
+        str(tmp_path),
+        [(12.69444, 47.07472), (4.835, 45.764)],
+        tile_reader(str(tmp_path)),
+    )
+
+    assert heights == [3790.0, None]  # Lyon: no file, read as a 204
+    assert read_local_tile(str(tmp_path / "no" / "such.s16")) is None
+
+
+def test_the_reader_is_http_for_a_url_and_refuses_anything_else(
+    tmp_path: Path,
+) -> None:
+    from terrain_grid import fetch_tile, read_local_tile, tile_reader
+
+    assert tile_reader("https://t.example/terrain/v2") is fetch_tile
+    assert tile_reader(str(tmp_path)) is read_local_tile
+    with pytest.raises(ValueError, match="neither an http"):
+        tile_reader(str(tmp_path / "missing"))
+
+
+def test_a_summit_outside_its_band_or_without_a_height_fails() -> None:
+    from terrain_grid import check_summits
+
+    band = {"below_m": 15, "above_m": 2}
+    summits = [
+        {"name": "Low", "height_m": 3000, "tolerance": band},
+        {"name": "High", "height_m": 3000, "tolerance": band},
+        {"name": "Gone", "height_m": 3000, "tolerance": band},
+        {"name": "Fine", "height_m": 3000, "tolerance": band},
+    ]
+
+    failures = check_summits(summits, [2984.0, 3002.5, None, 2990.0])
+
+    assert failures == [
+        "Low: 2984.00 m, expected 2985-3002 m",
+        "High: 3002.50 m, expected 2985-3002 m",
+        "Gone: no height, expected 2985-3002 m",
+    ]
+
+
+def places_tree(root: Path) -> None:
+    for summit in verify_points()["summits"]:
+        write_tile_at(root, summit["lon"], summit["lat"], summit["height_m"] - 5)
+
+
+def test_places_cli_passes_on_a_good_local_tree(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from terrain_grid import main
+
+    places_tree(tmp_path)
+    expect = tmp_path / "verify-gap.json"
+    expect.write_text(json.dumps({"gap": {"name": "Gap", "lon": 3.0, "lat": 44.0}}))
+
+    assert main(["places", "--url", str(tmp_path), "--expect", str(expect)]) == 0
+
+    out = capsys.readouterr().out
+    assert "Zugspitze (DE): 2957.00 m (published 2962 m)" in out
+    assert "Lyon: no tile, as expected" in out
+    assert "Gap: no tile, as expected" in out
+
+
+def test_places_cli_fails_on_a_stray_tile_and_warns_on_a_summit(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from terrain_grid import main
+
+    places_tree(tmp_path)
+    zugspitze = next(s for s in verify_points()["summits"] if "Zugspitze" in s["name"])
+    write_tile_at(tmp_path, zugspitze["lon"], zugspitze["lat"], 2900.0)
+
+    assert main(["places", "--url", str(tmp_path)]) == 0
+    assert "WARN Zugspitze (DE): 2900.00 m, expected 2947-2964 m" in (
+        capsys.readouterr().out
+    )
+
+    write_tile_at(tmp_path, 4.835, 45.764, 200.0)  # Lyon has a tile
+
+    assert main(["places", "--url", str(tmp_path)]) == 1
+    assert "FAIL Lyon: a tile exists where none should" in capsys.readouterr().out

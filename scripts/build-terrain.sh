@@ -9,7 +9,7 @@
 # inside TERRAIN_MAPTERHORN_BBOX are decoded, warped onto the same grid and
 # clipped to the coverage polygons of the national models Mapterhorn holds, so
 # ground only Copernicus GLO-30 covers stays absent (204). swissALTI3D is warped
-# exactly as before and composited last, so every Swiss height is unchanged.
+# as before and composited last, so the fill never overwrites a Swiss height.
 # Before anything is downloaded in bulk, datum_check.py compares heights across
 # four border crossings and stops the build on a step over 3 m.
 #
@@ -612,7 +612,11 @@ if [ "$mapterhorn" = 1 ]; then
         --swiss "$swiss_manifest" \
         --profile-points "${m_dir}/profile-points.txt" \
         --profile-swiss "${m_dir}/profile-swiss.txt" >"${out}/verify-gap.json"
-    echo "==> ${out}/verify-gap.json written for verify.sh"
+    # A second copy in the work directory, which outlives dist/terrain: the
+    # terrain-class target removes dist/terrain before it builds, and verify.sh
+    # still needs this file afterwards. verify.sh falls back to this copy.
+    cp "${out}/verify-gap.json" "${work}/verify-gap.json"
+    echo "==> ${out}/verify-gap.json written for verify.sh (copy in ${work})"
 fi
 
 echo

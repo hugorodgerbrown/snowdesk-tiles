@@ -1,21 +1,31 @@
 #!/usr/bin/env python3
-r"""Prove a rebuilt terrain grid kept every height the reference grid had.
+r"""Prove a rebuilt terrain grid kept the heights the reference grid had.
 
 SNOW-1505. The v2 grid adds the rest of the Alps around swissALTI3D; inside
-swissALTI3D's coverage it must hold exactly the heights v1 published, to the
-stored quarter-metre. Nothing downstream would notice otherwise — a Swiss slope
-recomputed from slightly different heights is still a plausible slope — so the
-build compares before it uploads, and a difference stops the upload.
+swissALTI3D's coverage it should hold the heights v1 published. Nothing
+downstream would notice otherwise — a Swiss slope recomputed from wrong heights
+is still a plausible slope — so the build compares before it uploads, and a
+failure stops the upload.
 
-The rule, for every tile in the reference tree:
+Not to the quarter-metre. The first Alps-wide build (19 Nov 2026) changed 15.5%
+of 16.1 million sampled Swiss cells: 14.6% by one stored step (0.25 m), the
+rounding of a warp over a wider grid, and about 0.1% by more than 2 m, up to
+107 m, where swisstopo had published newer surveys since v1 (quarries,
+landslides, glaciers). Hugo chose to publish those newer heights. What the check
+still catches is a build that broke them: a composite that let the fill
+overwrite Switzerland, an offset, a flip, a lost stretch of coverage.
 
-* the candidate tree must hold the tile too (a missing tile fails);
-* every cell valid in the reference (not -32768) must hold the same Int16 in
-  the candidate;
+The rule, over every tile in the reference tree:
+
+* the candidate tree must hold the tile too, at the right size;
+* at most MAX_FAR_SHARE of the reference's valid cells may move by more than
+  FAR_STEPS stored steps (2 m);
+* at most MAX_LOST_SHARE of them may lose their height;
+* the mean change may not exceed MAX_MEAN_STEPS (a systematic shift);
 * a cell absent in the reference may gain a height — that is the new coverage.
 
-It exits non-zero on the first difference, naming the tile and the cell, so the
-build log says where to look.
+It always prints the summary, and names the largest change, so the log says
+where to look.
 
 ``sample`` fetches the reference: tiles from the live grid, picked by a seeded
 shuffle of the swissALTI3D coverage rectangle in its grid.json, kept until it
@@ -61,19 +71,89 @@ def decode(body: bytes, label: str) -> tuple[int, ...]:
     return cells
 
 
-def compare_tile(reference: bytes, candidate: bytes, label: str) -> None:
-    """Raise at the first valid reference cell the candidate changed."""
-    ref = decode(reference, f"reference {label}")
-    cand = decode(candidate, f"candidate {label}")
-    if ref == cand:
-        return
-    for index, (old, new) in enumerate(zip(ref, cand, strict=True)):
-        if old != NODATA and old != new:
-            row, col = divmod(index, STORED_CELLS)
-            raise HeightChangedError(
-                f"tile {label} cell (row {row}, col {col}): reference {old}, "
-                f"candidate {new}"
+#: A change of more than this many stored steps (0.25 m each) is a "far" one.
+FAR_STEPS = 8
+#: At most this share of valid reference cells may move far: 1%, ten times what
+#: newer swisstopo surveys moved in the first Alps-wide build (0.1%).
+MAX_FAR_SHARE = 0.01
+#: At most this share may lose their height (4 of 16.1 million did, 0.00002%).
+MAX_LOST_SHARE = 0.0001
+#: The mean change, in stored steps, may not exceed this either way.
+MAX_MEAN_STEPS = 1.0
+
+
+class Tally:
+    """What changed between the reference and the candidate, over valid cells."""
+
+    def __init__(self) -> None:
+        """Start empty."""
+        self.valid = 0
+        self.changed = 0
+        self.far = 0
+        self.lost = 0
+        self.total_steps = 0
+        self.largest = 0
+        self.largest_at = ""
+
+    def add_tile(self, reference: bytes, candidate: bytes, label: str) -> None:
+        """Count one tile's valid reference cells and how each one changed."""
+        ref = decode(reference, f"reference {label}")
+        cand = decode(candidate, f"candidate {label}")
+        for index, (old, new) in enumerate(zip(ref, cand, strict=True)):
+            if old == NODATA:
+                continue
+            self.valid += 1
+            if new == NODATA:
+                self.lost += 1
+                continue
+            step = new - old
+            if not step:
+                continue
+            self.changed += 1
+            self.total_steps += step
+            if abs(step) > FAR_STEPS:
+                self.far += 1
+            if abs(step) > abs(self.largest):
+                row, col = divmod(index, STORED_CELLS)
+                self.largest = step
+                self.largest_at = f"tile {label} cell (row {row}, col {col})"
+
+    def failures(self) -> list[str]:
+        """Return why the candidate fails, or nothing when it passes."""
+        if not self.valid:
+            return ["the reference holds no valid cells"]
+        problems = []
+        if self.far > MAX_FAR_SHARE * self.valid:
+            problems.append(
+                f"{self.far / self.valid:.2%} of Swiss cells moved more than "
+                f"{FAR_STEPS * 0.25:g} m (at most {MAX_FAR_SHARE:.0%} may)"
             )
+        if self.lost > MAX_LOST_SHARE * self.valid:
+            problems.append(
+                f"{self.lost} Swiss cells lost their height "
+                f"(at most {MAX_LOST_SHARE:.2%} may)"
+            )
+        mean = self.total_steps / self.valid
+        if abs(mean) > MAX_MEAN_STEPS:
+            problems.append(
+                f"the heights shifted by {mean * 0.25:+.2f} m on average "
+                f"(at most {MAX_MEAN_STEPS * 0.25:g} m either way)"
+            )
+        return problems
+
+    def summary(self) -> str:
+        """Return the counts, as the build log prints them."""
+        mean_m = self.total_steps / self.valid * 0.25 if self.valid else 0.0
+        largest = (
+            f"; largest {self.largest * 0.25:+.2f} m at {self.largest_at}"
+            if self.largest
+            else ""
+        )
+        return (
+            f"{self.valid} Swiss cells: {self.changed} changed, {self.far} by more "
+            f"than {FAR_STEPS * 0.25:g} m, {self.lost} lost; mean change "
+            f"{mean_m:+.3f} m{largest}"
+        )
 
 
 def tiles(root: Path) -> Iterator[tuple[int, int]]:
@@ -84,9 +164,14 @@ def tiles(root: Path) -> Iterator[tuple[int, int]]:
     yield from sorted(found)
 
 
-def compare(reference: Path, candidate: Path) -> int:
-    """Compare two tile trees; return the number of tiles compared."""
+def compare(reference: Path, candidate: Path) -> tuple[int, Tally]:
+    """Compare two tile trees; return the tiles compared and what changed.
+
+    Raises on a tile the candidate lacks or holds at the wrong size, and on an
+    empty reference. Whether the changes are acceptable is ``Tally.failures``.
+    """
     count = 0
+    tally = Tally()
     for x, y in tiles(reference):
         label = f"{x}/{y}"
         other = candidate / str(x) / f"{y}.s16"
@@ -94,13 +179,13 @@ def compare(reference: Path, candidate: Path) -> int:
             raise HeightChangedError(
                 f"tile {label} is in the reference but not the candidate"
             )
-        compare_tile(
+        tally.add_tile(
             (reference / str(x) / f"{y}.s16").read_bytes(), other.read_bytes(), label
         )
         count += 1
     if not count:
         raise HeightChangedError(f"the reference {reference} holds no tiles")
-    return count
+    return count, tally
 
 
 # --- sample -----------------------------------------------------------------
@@ -216,11 +301,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("candidate", type=Path)
     args = parser.parse_args(argv)
     try:
-        count = compare(args.reference, args.candidate)
+        count, tally = compare(args.reference, args.candidate)
     except HeightChangedError as error:
         print(f"error: {error}", file=sys.stderr)
         return 1
-    print(f"==> {count} tiles: every reference height unchanged", file=sys.stderr)
+    print(f"==> {count} tiles, {tally.summary()}", file=sys.stderr)
+    problems = tally.failures()
+    for problem in problems:
+        print(f"error: {problem}", file=sys.stderr)
+    if problems:
+        return 1
+    print("==> Swiss heights within tolerance of the reference", file=sys.stderr)
     return 0
 
 

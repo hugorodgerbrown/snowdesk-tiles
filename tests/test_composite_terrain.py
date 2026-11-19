@@ -185,8 +185,14 @@ def test_cut_composite_keeps_every_swiss_height(
     built: dict[str, Path], tmp_path: Path
 ) -> None:
     # The pre-upload check end to end: a swissALTI3D-only build is the
-    # reference, the composite the candidate, and compare_grids must pass.
+    # reference, the composite the candidate. Built from the same warp, the
+    # composite must keep every Swiss height exactly, not just within the
+    # tolerance compare_grids allows a rebuild against the live grid.
     reference = quantise_and_cut(built["swiss"], tmp_path, "swiss")
     candidate = quantise_and_cut(built["merged"], tmp_path, "merged")
 
-    assert compare(reference, candidate) == 2
+    count, tally = compare(reference, candidate)
+
+    assert count == 2
+    assert (tally.changed, tally.lost) == (0, 0)
+    assert tally.failures() == []

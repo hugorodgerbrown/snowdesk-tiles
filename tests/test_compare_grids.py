@@ -1,8 +1,9 @@
 """Tests for the Swiss-heights-unchanged check (SNOW-1505).
 
-The check is the stop before upload: a rebuilt grid that moved one Swiss
-height by a quarter-metre must not publish. So each test builds two small tile
-trees and changes exactly one thing between them.
+The check is the stop before upload: a rebuilt grid that broke the Swiss
+heights must not publish, while one that rounds them a quarter-metre
+differently, or carries newer swisstopo surveys, may. So each test builds two
+small tile trees and changes one thing between them.
 """
 
 from __future__ import annotations
@@ -18,7 +19,9 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from compare_grids import (  # noqa: E402
+    FAR_STEPS,
     HeightChangedError,
+    Tally,
     classify,
     compare,
     main,
@@ -55,21 +58,62 @@ def trees(tmp_path: Path) -> tuple[Path, Path]:
 def test_identical_trees_pass(trees: tuple[Path, Path]) -> None:
     ref, cand = trees
 
-    assert compare(ref, cand) == 2
+    count, tally = compare(ref, cand)
+
+    assert count == 2
+    assert tally.valid == 2 * CELLS
+    assert tally.changed == 0
+    assert tally.failures() == []
 
 
-def test_one_changed_valid_cell_fails_naming_the_tile_and_cell(
+def test_quarter_metre_rounding_everywhere_passes(trees: tuple[Path, Path]) -> None:
+    ref, cand = trees
+    write(cand, 3239, 2005, [v + (1 if i % 2 else -1) for i, v in enumerate(ramp())])
+
+    _, tally = compare(ref, cand)
+
+    assert tally.changed == CELLS
+    assert tally.far == 0
+    assert tally.failures() == []
+
+
+def test_a_few_newer_surveys_pass_and_the_largest_is_named(
     trees: tuple[Path, Path],
 ) -> None:
     ref, cand = trees
     values = ramp()
-    values[5 * STORED_CELLS + 7] += 1  # a quarter-metre
+    values[5 * STORED_CELLS + 7] += 427  # 107 m: a quarry
     write(cand, 3239, 2005, values)
 
-    with pytest.raises(
-        HeightChangedError, match=r"tile 3239/2005 cell \(row 5, col 7\)"
-    ):
-        compare(ref, cand)
+    _, tally = compare(ref, cand)
+
+    assert tally.far == 1
+    assert tally.failures() == []
+    assert "+106.75 m at tile 3239/2005 cell (row 5, col 7)" in tally.summary()
+
+
+def test_more_than_one_percent_moved_far_fails(trees: tuple[Path, Path]) -> None:
+    ref, cand = trees
+    values = ramp()
+    for index in range(0, CELLS, 50):  # 2% of one tile is 1% of both
+        values[index] += FAR_STEPS + 1
+    values[1] += FAR_STEPS + 1
+    write(cand, 3239, 2005, values)
+
+    _, tally = compare(ref, cand)
+
+    assert any("moved more than 2 m" in problem for problem in tally.failures())
+
+
+def test_a_systematic_shift_fails(trees: tuple[Path, Path]) -> None:
+    ref, cand = trees
+    for x in (3238, 3239):
+        write(cand, x, 2005, [v + 2 for v in ramp()])  # +0.5 m everywhere
+
+    _, tally = compare(ref, cand)
+
+    assert tally.far == 0
+    assert any("shifted by +0.50 m" in problem for problem in tally.failures())
 
 
 def test_a_cell_absent_in_the_reference_may_gain_a_height(
@@ -80,17 +124,29 @@ def test_a_cell_absent_in_the_reference_may_gain_a_height(
     values[100] = NODATA
     write(ref, 3238, 2005, values)
 
-    assert compare(ref, cand) == 2
+    _, tally = compare(ref, cand)
+
+    assert tally.failures() == []
 
 
-def test_a_height_lost_from_the_reference_fails(trees: tuple[Path, Path]) -> None:
+def test_a_lost_stretch_of_heights_fails(trees: tuple[Path, Path]) -> None:
     ref, cand = trees
     values = ramp()
-    values[100] = NODATA
+    for index in range(STORED_CELLS):  # one row of cells gone
+        values[index] = NODATA
     write(cand, 3238, 2005, values)
 
-    with pytest.raises(HeightChangedError, match="candidate -32768"):
-        compare(ref, cand)
+    _, tally = compare(ref, cand)
+
+    assert tally.lost == STORED_CELLS
+    assert any("lost their height" in problem for problem in tally.failures())
+
+
+def test_one_lost_height_is_tolerated() -> None:
+    tally = Tally()
+    tally.valid, tally.lost = 16_000_000, 4
+
+    assert tally.failures() == []
 
 
 def test_a_tile_missing_from_the_candidate_fails(trees: tuple[Path, Path]) -> None:
@@ -107,7 +163,10 @@ def test_a_tile_only_the_candidate_has_is_new_coverage(
     ref, cand = trees
     write(cand, 4000, 2000, ramp())
 
-    assert compare(ref, cand) == 2
+    count, tally = compare(ref, cand)
+
+    assert count == 2
+    assert tally.failures() == []
 
 
 def test_a_truncated_candidate_tile_fails(trees: tuple[Path, Path]) -> None:
@@ -123,18 +182,29 @@ def test_an_empty_reference_fails(tmp_path: Path) -> None:
         compare(tmp_path, tmp_path)
 
 
-def test_cli_exits_non_zero_on_a_difference(
+def test_cli_prints_the_summary_and_exits_non_zero_beyond_tolerance(
     trees: tuple[Path, Path], capsys: pytest.CaptureFixture[str]
 ) -> None:
     ref, cand = trees
     assert main([str(ref), str(cand)]) == 0
+    assert "within tolerance" in capsys.readouterr().err
 
-    values = ramp()
-    values[0] = 1
-    write(cand, 3238, 2005, values)
+    write(cand, 3238, 2005, [v + 40 for v in ramp()])
 
     assert main([str(ref), str(cand)]) == 1
-    assert "tile 3238/2005 cell (row 0, col 0)" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert "2 tiles," in err
+    assert "error: 50.00% of Swiss cells moved more than 2 m" in err
+
+
+def test_cli_exits_non_zero_on_a_missing_tile(
+    trees: tuple[Path, Path], capsys: pytest.CaptureFixture[str]
+) -> None:
+    ref, cand = trees
+    (cand / "3239" / "2005.s16").unlink()
+
+    assert main([str(ref), str(cand)]) == 1
+    assert "not the candidate" in capsys.readouterr().err
 
 
 # --- The reference sample ------------------------------------------------------
