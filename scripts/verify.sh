@@ -9,6 +9,11 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 # shellcheck source=scripts/config.sh
 source scripts/config.sh
+# shellcheck source=scripts/failure.sh
+source scripts/failure.sh
+stage "verifying the published tiles" \
+    "A check failed, or could not run (the network, or a file it reads such as verify-gap.json is missing). The line just above says which. The tiles stay published either way." \
+    "Send Claude the box and the 30 lines above it."
 
 : "${SITE_ORIGIN:=https://snowdesk.info}"
 

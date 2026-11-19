@@ -87,6 +87,11 @@ else
 fi
 # shellcheck source=scripts/config.sh
 source scripts/config.sh
+# shellcheck source=scripts/failure.sh
+source scripts/failure.sh
+stage "reading the R2 credentials" \
+    "A credential is missing: CLOUDFLARE_ACCOUNT_ID, AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY must all be set. Nothing has been built or uploaded." \
+    "Paste the three exports from the run sheet's step 5 into this window, then run the same command again."
 
 # Prompt rather than take these on the command line: an inline assignment lands
 # in shell history and is visible in the process table to anything else on the
@@ -198,6 +203,9 @@ install_pmtiles_cli() {
     echo "    pmtiles ${version} installed"
 }
 
+stage "installing the build tools" \
+    "apt or a download of the AWS or pmtiles CLI failed: usually the network, or apt busy with an automatic update. Nothing has been built or uploaded." \
+    "Wait a minute and run the same command again."
 echo "==> installing build dependencies for ${target}"
 if command -v apt-get >/dev/null 2>&1; then
     export DEBIAN_FRONTEND=noninteractive
@@ -228,6 +236,9 @@ fi
 # rasters and the tiles peak at an estimated 300-350 GB. terrain-class adds
 # ~125 GB of class planes and Mercator rasters on top of the terrain build it
 # starts from (estimated: five times Switzerland's ~25 GB).
+stage "checking the disk" \
+    "This server's disk is too small for the build. Nothing has been built or uploaded." \
+    "Free space (df -h /) or rebuild on a bigger server: the run sheet names the type."
 need_gb=100
 [ "$target" = "terrain" ] && need_gb=400
 [ "$target" = "terrain-class" ] && need_gb=525
@@ -241,7 +252,22 @@ if [ "${free_gb:-0}" -lt "$need_gb" ]; then
     exit 1
 fi
 
+# Before hours of build, not after: a mistyped key would otherwise surface
+# only at the upload. Listing one key needs no more than the Object Read & Write
+# scope the token has.
+stage "checking the R2 credentials" \
+    "R2 refused the credentials or could not be reached: a value was mistyped or pasted with a space, the token was revoked, or it lacks access to ${R2_BUCKET}. Nothing has been built or uploaded." \
+    "Paste the three exports from step 5 again, carefully, then run the same command again. If it fails the same way, make a new R2 token (Object Read & Write on ${R2_BUCKET})."
+echo "==> checking the R2 credentials"
+aws s3api list-objects-v2 --bucket "$R2_BUCKET" --max-keys 1 \
+    --endpoint-url "https://${CLOUDFLARE_ACCOUNT_ID}.r2.cloudflarestorage.com" \
+    --region auto >/dev/null
+echo "    ok    R2 accepts the credentials for ${R2_BUCKET}"
+
 if [ "$target" = "basemap" ]; then
+    stage "building the basemap" \
+        "planetiler stopped; the lines above say why. Nothing has been uploaded." \
+        "Send Claude the box and the 20 lines above it."
     echo "==> building ${PMTILES_NAME} for ${PLANETILER_BOUNDS}"
     # Give planetiler most of the box's RAM; it is the whole reason for renting
     # one.
@@ -249,6 +275,9 @@ if [ "$target" = "basemap" ]; then
     export PLANETILER_MEMORY="$(( total_mb * 3 / 4 ))m"
     ./scripts/build-extract.sh
 
+    stage "uploading the basemap" \
+        "The copy to R2 failed part way: usually the network. The live basemap is unchanged until the copy completes." \
+        "Run the same command again."
     # Not upload.sh: that skips an archive whose byte count matches the bucket,
     # and a rebuild landing on an identical size is possible. One object, one
     # unconditional copy.
@@ -262,6 +291,9 @@ if [ "$target" = "basemap" ]; then
 
     artefact="${PMTILES_NAME}"
 elif [ "$target" = "terrain" ]; then
+    stage "building the terrain tileset" \
+        "The terrain build stopped; the box above says where." \
+        "Follow the box above."
     echo "==> building the terrain tileset for ${TERRAIN_BBOX} (fill: ${TERRAIN_MAPTERHORN_BBOX:-none}, dem ${TERRAIN_DEM_VERSION})"
     ./scripts/build-terrain.sh
 
@@ -271,6 +303,9 @@ elif [ "$target" = "terrain" ]; then
     # same Int16 in every valid cell of the new build. A difference stops here,
     # before anything reaches the bucket. There is no flag past it.
     reference="${TERRAIN_WORK_DIR}/reference-${TERRAIN_REFERENCE_VERSION}"
+    stage "comparing Swiss heights with the live grid" \
+        "Either the live grid could not be read for the comparison (a network failure), or the rebuild changed a Swiss height. Nothing has been uploaded." \
+        "If the lines above name a tile and a cell, send them to Claude. If they show a download error, run the same command again: finished build stages are skipped."
     echo "==> comparing Swiss heights with live terrain/${TERRAIN_REFERENCE_VERSION}"
     python3 scripts/compare_grids.py sample \
         --url "${TILES_ORIGIN}/${TERRAIN_DIR}/${TERRAIN_REFERENCE_VERSION}" \
@@ -287,14 +322,23 @@ elif [ "$target" = "terrain" ]; then
     # transfers only what is missing — and grid.json has to land last, with its
     # own Content-Type and TTL. The script publishes only what is staged, so the
     # style and the mirror are left as they are.
+    stage "uploading the terrain tiles" \
+        "The upload to R2 stopped part way: usually the network. grid.json goes last, so the new version is not usable until a full upload finishes, and the live version is untouched." \
+        "Run the same command again: finished build stages are skipped, and the upload sends only what is missing."
     echo "==> uploading to R2"
     ./scripts/upload.sh
 
     artefact="${TERRAIN_DIR}/ ($(find "${DIST_DIR}/${TERRAIN_DIR}" -name '*.s16' | wc -l | tr -d ' ') tiles)"
 elif [ "$target" = "dem" ]; then
+    stage "building the 3-D elevation copy" \
+        "The elevation copy build stopped; the lines above say why. Nothing has been uploaded." \
+        "Run the same command again; if it stops here twice, send Claude the box and the 20 lines above it."
     echo "==> building the 3-D elevation copy ${dem_version}"
     ./scripts/build-dem.sh "$dem_version"
 
+    stage "uploading the 3-D elevation copy" \
+        "The upload to R2 stopped part way: usually the network. A version already in the bucket is never replaced." \
+        "Run the same command again."
     # upload.sh publishes only what is staged — here dist/dem/ — and never
     # replaces a version that is already in the bucket.
     echo "==> uploading to R2"
@@ -311,6 +355,9 @@ else
     # class build should have. (If swisstopo have published new squares since
     # the live grid was built, the classes will describe the newer heights;
     # verify.sh compares them against the live grid and will say so.)
+    stage "building the elevation grid the classes come from" \
+        "The terrain build stopped; the box above says where." \
+        "Follow the box above."
     if [ ! -s "${TERRAIN_WORK_DIR}/grid.raw" ]; then
         echo "==> no ${TERRAIN_WORK_DIR}/grid.raw — building the elevation grid first"
         ./scripts/build-terrain.sh
@@ -319,9 +366,15 @@ else
     # its tiles staged, and upload.sh publishes whatever dist/ holds.
     rm -rf "${DIST_DIR:?}/${TERRAIN_DIR:?}"
 
+    stage "building the terrain-class tileset" \
+        "The class build stopped; the lines above say why. Nothing has been uploaded." \
+        "Run the same command again. If it stops here twice, send Claude the box and the 20 lines above it."
     echo "==> building the terrain-class tileset"
     ./scripts/build-terrain-class.sh
 
+    stage "uploading the class tiles" \
+        "The upload to R2 stopped part way: usually the network. The live class tiles are untouched." \
+        "Run the same command again."
     # The Worker has to know the /terrain-class/ route before these are of any
     # use — until it is deployed they answer 404, since the bucket keys carry
     # no version — but nothing breaks either way round, so the deploy and this

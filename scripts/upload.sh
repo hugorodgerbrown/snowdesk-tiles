@@ -22,6 +22,11 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 # shellcheck source=scripts/config.sh
 source scripts/config.sh
+# shellcheck source=scripts/failure.sh
+source scripts/failure.sh
+stage "uploading to R2" \
+    "A copy to R2 failed: usually the network, or the R2 credentials were cleared from this window. Objects already copied stay, and the version index (grid.json, the style) is written last, so nothing half-uploaded is live." \
+    "Check echo \$AWS_ACCESS_KEY_ID prints a value (if not, paste the step 5 exports again), then run the same command again: it sends only what is missing."
 # shellcheck source=scripts/op-env.sh
 source scripts/op-env.sh
 op_reexec scripts/upload.sh CLOUDFLARE_ACCOUNT_ID AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY -- "$@"
