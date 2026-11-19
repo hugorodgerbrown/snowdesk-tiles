@@ -43,6 +43,8 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 # shellcheck source=scripts/config.sh
 source scripts/config.sh
+# shellcheck source=scripts/failure.sh
+source scripts/failure.sh
 
 # PYTHON must be a path to an interpreter, not a command line — it is invoked
 # quoted, so "uv run python" would be looked up as a single executable name.
@@ -115,6 +117,9 @@ cols=$(( (te_e - te_w) / cell ))
 rows=$(( (te_n - te_s) / cell ))
 
 # --- 1. Classify, in EPSG:3035 -----------------------------------------------
+stage "classifying slope, aspect and curvature" \
+    "The classifier stopped: usually memory or the disk (free -g and df -h / show them). Nothing has been uploaded." \
+    "Run the same command again: finished stages are skipped. If it stops here twice, send Claude the box and the 20 lines above it."
 
 if [ -s "$vrt" ] && [ "$force" != "1" ]; then
     echo "==> ${vrt} exists — skipping classification; FORCE_TERRAIN_CLASS=1 to redo"
@@ -128,6 +133,9 @@ else
 fi
 
 # --- 2. Warp to Web Mercator, one raster per zoom -----------------------------
+stage "warping the classes to Web Mercator" \
+    "gdalwarp stopped: usually the disk is full (df -h /). Nothing has been uploaded." \
+    "Run the same command again: finished zooms are skipped."
 
 zooms=$(seq "$TERRAIN_CLASS_MIN_ZOOM" "$TERRAIN_CLASS_MAX_ZOOM")
 for zoom in $zooms; do
@@ -216,6 +224,9 @@ for zoom in $zooms; do
 done
 
 # --- 3. Cut the tiles ---------------------------------------------------------
+stage "cutting the class tiles" \
+    "Cutting stopped: usually the disk is full (df -h /). Nothing has been uploaded." \
+    "Run the same command again."
 
 # shellcheck disable=SC2086 - zooms is a list of integers, deliberately split
 "$python" scripts/cut_terrain_class_tiles.py \
