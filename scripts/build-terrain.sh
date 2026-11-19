@@ -202,8 +202,37 @@ if [ "$mapterhorn" = 1 ]; then
         --attribution "${m_dir}/attribution.json" \
         --area "$DEM_AREA" \
         --bbox $TERRAIN_MAPTERHORN_BBOX \
-        --clip "${m_dir}/clip.geojson" \
+        --clip "${m_dir}/clip-full.geojson" \
         --credits "${m_dir}/credits.json"
+
+    # The polygons as published are far too heavy to cut with: over the Alps
+    # they hold 17 million points (676 MB), GDAL refuses to read them as one
+    # GeoJSON object, and even when told to, gdalwarp spent ten minutes on one
+    # 300 m box and then hit a topology error. So trace one compact outline
+    # instead: burn them onto a ~22 m grid, trace that and simplify by half a
+    # cell. The borders between national models vanish in the union, so the
+    # only edges left are against GLO-30-only ground and the sea, and those
+    # move by about one cell (~20 m). Measured on the 18 Nov 2026 coverage:
+    # about 7 minutes on 4 cores, 5 MB out, and a 300 m box warps in 4 s.
+    echo "==> compacting the clip outline"
+    # Over the fill's bbox and every datum crossing's window, since the check
+    # runs at all of them whatever the bbox.
+    # shellcheck disable=SC2086 - four numbers
+    clip_extent=$("$python" scripts/datum_check.py --print-extent $TERRAIN_MAPTERHORN_BBOX)
+    # shellcheck disable=SC2086 - four numbers
+    OGR_GEOJSON_MAX_OBJ_SIZE=0 gdal_rasterize -q \
+        -burn 1 -ot Byte -init 0 -a_nodata 0 \
+        -te $clip_extent -tr 0.0003 0.0002 \
+        -co TILED=YES -co COMPRESS=DEFLATE \
+        "${m_dir}/clip-full.geojson" "${m_dir}/clip-mask.tif"
+    rm -f "${m_dir}/clip-traced.gpkg"
+    gdal_polygonize.py -q "${m_dir}/clip-mask.tif" -f GPKG "${m_dir}/clip-traced.gpkg" clip
+    rm -f "${m_dir}/clip.geojson.part"
+    ogr2ogr -f GeoJSON -nln clip -simplify 0.0001 \
+        -dialect sqlite -sql "SELECT ST_Union(geom) AS geometry FROM clip" \
+        "${m_dir}/clip.geojson.part" "${m_dir}/clip-traced.gpkg"
+    mv "${m_dir}/clip.geojson.part" "${m_dir}/clip.geojson"
+    echo "    $(du -h "${m_dir}/clip.geojson" | cut -f1) from $(du -h "${m_dir}/clip-full.geojson" | cut -f1)"
 
     echo "==> datum check at the border crossings"
     "$python" scripts/datum_check.py \
