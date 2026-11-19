@@ -258,8 +258,20 @@ case $target in
     terrain) reused=("$TERRAIN_WORK_DIR" "${DIST_DIR}/${TERRAIN_DIR}") ;;
     # The class build starts from the terrain grid, and removes the terrain
     # tiles before it cuts its own.
-    terrain-class) reused=("$TERRAIN_WORK_DIR" "${DIST_DIR}/${TERRAIN_DIR}"
-        "$TERRAIN_CLASS_WORK_DIR" "${DIST_DIR}/${TERRAIN_CLASS_DIR}") ;;
+    terrain-class)
+        if [ -s "${TERRAIN_WORK_DIR}/grid.raw" ]; then
+            # The terrain grid is built and stays: only the class build's ~125
+            # GB is new, so that is what free space (plus the class build's own
+            # earlier output) must cover. 150 leaves a margin over the estimate.
+            # Counting work/terrain here instead made the need ~525 GB against
+            # ~529 GB on the CPX62 after the terrain build, too close to trust.
+            need_gb=150
+            reused=("$TERRAIN_CLASS_WORK_DIR" "${DIST_DIR}/${TERRAIN_CLASS_DIR}")
+        else
+            reused=("$TERRAIN_WORK_DIR" "${DIST_DIR}/${TERRAIN_DIR}"
+                "$TERRAIN_CLASS_WORK_DIR" "${DIST_DIR}/${TERRAIN_CLASS_DIR}")
+        fi
+        ;;
     dem) reused=("${DIST_DIR}/${DEM_DIR}/${dem_version:-none}") ;;
     *) reused=() ;;
 esac
