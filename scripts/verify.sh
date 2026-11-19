@@ -331,9 +331,15 @@ for p in json.load(open("scripts/verify_points.json"))["absent"]:
     # What only the build knows: a point inside the supported area that no
     # national model covers (GLO-30-only ground, which the clip leaves out),
     # and where along each seam profile a model covers. build-terrain.sh writes
-    # them to dist/terrain/verify-gap.json; on another machine, copy it there
-    # (vm-build.sh prints it) or point TERRAIN_VERIFY_GAP at it.
+    # them to dist/terrain/verify-gap.json and a copy to work/terrain, which
+    # survives the terrain-class build removing dist/terrain; on another
+    # machine, copy it there (vm-build.sh prints it) or point TERRAIN_VERIFY_GAP
+    # at it.
     gap_file=${TERRAIN_VERIFY_GAP:-${DIST_DIR}/${TERRAIN_DIR}/verify-gap.json}
+    if [ -z "${TERRAIN_VERIFY_GAP:-}" ] && [ ! -s "$gap_file" ] \
+        && [ -s "${TERRAIN_WORK_DIR}/verify-gap.json" ]; then
+        gap_file="${TERRAIN_WORK_DIR}/verify-gap.json"
+    fi
     if [ ! -s "$gap_file" ]; then
         printf '  FAIL  terrain: no %s — the gap probe and seam profiles need it\n' "$gap_file"
         failures=$((failures + 1))

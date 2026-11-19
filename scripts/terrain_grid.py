@@ -61,6 +61,11 @@ Usage:
     python scripts/terrain_grid.py profile "Theodul Pass" \
         --url https://tiles.snowdesk-data.info/terrain/v2 \
         --expect dist/terrain/verify-gap.json
+    python scripts/terrain_grid.py places --url dist/terrain \
+        --expect dist/terrain/verify-gap.json
+
+``profile`` and ``places`` take a base URL or a local tile tree: the build runs
+them on its own tree before it uploads, and verify.sh on the origin after.
 """
 
 from __future__ import annotations
@@ -747,6 +752,29 @@ def fetch_tile(url: str) -> bytes | None:
     return body
 
 
+def read_local_tile(path: str) -> bytes | None:
+    """Return a tile body from a local tree, or None where no tile was cut.
+
+    The build's own tree has no tile where no source covers the ground, which
+    is what the origin answers 204 for; a missing file means the same here.
+    """
+    tile = Path(path)
+    return tile.read_bytes() if tile.is_file() else None
+
+
+def tile_reader(base: str) -> Callable[[str], bytes | None]:
+    """Return the fetch for a tileset: HTTP for a URL, the disk for a directory.
+
+    The build checks its own tree before uploading, with the same code verify.sh
+    runs against the origin afterwards, so a failure surfaces before the upload.
+    """
+    if base.startswith(("http://", "https://")):
+        return fetch_tile
+    if not Path(base).is_dir():
+        raise ValueError(f"{base} is neither an http(s) URL nor a tile directory")
+    return read_local_tile
+
+
 def sample_heights(
     url: str,
     points: list[tuple[float, float]],
@@ -772,7 +800,9 @@ def _cmd_profile(args: argparse.Namespace) -> int:
     expect = expectations["profiles"][args.name]
     samples = _profile_samples(profile)
     distances = [sample[0] for sample in samples]
-    heights = sample_heights(args.url, [(s[1], s[2]) for s in samples])
+    heights = sample_heights(
+        args.url, [(s[1], s[2]) for s in samples], tile_reader(args.url)
+    )
     failures, step = assess_profile(
         distances, heights, expect, float(profile.get("max_step_m", 3.0))
     )
@@ -787,6 +817,67 @@ def _cmd_profile(args: argparse.Namespace) -> int:
     else:
         print(f"ok seam step {step:.2f} m")
     return 0
+
+
+def check_summits(
+    summits: list[dict[str, Any]], heights: list[float | None]
+) -> list[str]:
+    """Return a failure line for each summit outside its tolerance band."""
+    failures = []
+    for summit, height in zip(summits, heights, strict=True):
+        low = summit["height_m"] - summit["tolerance"]["below_m"]
+        high = summit["height_m"] + summit["tolerance"]["above_m"]
+        if height is None:
+            failures.append(f"{summit['name']}: no height, expected {low}-{high} m")
+        elif not low <= height <= high:
+            failures.append(
+                f"{summit['name']}: {height:.2f} m, expected {low}-{high} m"
+            )
+    return failures
+
+
+def tile_exists(
+    base: str, lon: float, lat: float, fetch: Callable[[str], bytes | None]
+) -> bool:
+    """Return whether the tileset holds a tile at (lon, lat): not a 204."""
+    cell = cell_for(*lonlat_to_grid(lon, lat))
+    return fetch(f"{base.rstrip('/')}/{cell.tile_x}/{cell.tile_y}.s16") is not None
+
+
+def _cmd_places(args: argparse.Namespace) -> int:
+    # The named places verify.sh checks after the upload, run against a local
+    # tree before it. A point no source covers that holds a tile fails: the
+    # build put heights where it promised none. A summit outside its band only
+    # warns. The summit coordinates are ours, from public pages, not surveyed
+    # (verify_points.json), so a miss is more likely a coordinate than the
+    # tiles, and verify.sh reports it again after the upload.
+    document = json.loads(args.points.read_text(encoding="utf-8"))
+    summits: list[dict[str, Any]] = document["summits"]
+    fetch = tile_reader(args.url)
+    heights = sample_heights(
+        args.url, [(float(s["lon"]), float(s["lat"])) for s in summits], fetch
+    )
+    for summit, height in zip(summits, heights, strict=True):
+        shown = "no height" if height is None else f"{height:.2f} m"
+        print(f"{summit['name']}: {shown} (published {summit['height_m']} m)")
+    for warning in check_summits(summits, heights):
+        print(f"WARN {warning}")
+
+    absent: list[dict[str, Any]] = list(document.get("absent", []))
+    if args.expect is not None:
+        gap = json.loads(args.expect.read_text(encoding="utf-8")).get("gap")
+        if gap is not None:
+            absent.append(gap)
+    failures = []
+    for place in absent:
+        if tile_exists(args.url, float(place["lon"]), float(place["lat"]), fetch):
+            failures.append(f"{place['name']}: a tile exists where none should")
+        else:
+            print(f"{place['name']}: no tile, as expected")
+
+    for failure in failures:
+        print(f"FAIL {failure}")
+    return 1 if failures else 0
 
 
 def _cmd_gdal_args(args: argparse.Namespace) -> int:
@@ -844,12 +935,27 @@ def main(argv: list[str] | None = None) -> int:
 
     p_profile = sub.add_parser("profile", help="check one seam profile")
     p_profile.add_argument("name", help="a profile name in verify_points.json")
-    p_profile.add_argument("--url", required=True, help="terrain/<version> base URL")
+    p_profile.add_argument(
+        "--url", required=True, help="terrain/<version> base URL, or a local tile tree"
+    )
     p_profile.add_argument(
         "--expect", type=Path, required=True, help="the build's verify-gap.json"
     )
     p_profile.add_argument("--points", type=Path, default=VERIFY_POINTS)
     p_profile.set_defaults(func=_cmd_profile)
+
+    p_places = sub.add_parser(
+        "places",
+        help="no tile where no source covers; warn on a summit outside its band",
+    )
+    p_places.add_argument(
+        "--url", required=True, help="terrain/<version> base URL, or a local tile tree"
+    )
+    p_places.add_argument(
+        "--expect", type=Path, help="the build's verify-gap.json, for its gap point"
+    )
+    p_places.add_argument("--points", type=Path, default=VERIFY_POINTS)
+    p_places.set_defaults(func=_cmd_places)
 
     p_gdal = sub.add_parser("gdal-args", help="values the GDAL steps need")
     p_gdal.add_argument("what", choices=["dstnodata", "scale", "cell-size"])

@@ -324,15 +324,18 @@ elif [ "$target" = "terrain" ]; then
     echo "==> building the terrain tileset for ${TERRAIN_BBOX} (fill: ${TERRAIN_MAPTERHORN_BBOX:-none}, dem ${TERRAIN_DEM_VERSION})"
     ./scripts/build-terrain.sh
 
-    # Swiss heights unchanged, or no upload (SNOW-1505). 300 tiles of the live
-    # grid — 200 wholly inside swissALTI3D's coverage, 100 on its edge, picked
-    # by a fixed seed from the coverage its grid.json publishes — must hold the
-    # same Int16 in every valid cell of the new build. A difference stops here,
-    # before anything reaches the bucket. There is no flag past it.
+    # Swiss heights kept, or no upload (SNOW-1505). 300 tiles of the live grid
+    # — 200 wholly inside swissALTI3D's coverage, 100 on its edge, picked by a
+    # fixed seed from the coverage its grid.json publishes — are compared with
+    # the new build. Not to the quarter-metre: the first Alps-wide build rounded
+    # 15% of Swiss cells one step differently and carried swisstopo's newer
+    # surveys, and Hugo accepted both (19 Nov 2026). It stops on what a broken
+    # build looks like instead: over 1% of cells moved more than 2 m, heights
+    # lost, or a shift on average. compare_grids.py has the numbers.
     reference="${TERRAIN_WORK_DIR}/reference-${TERRAIN_REFERENCE_VERSION}"
     stage "comparing Swiss heights with the live grid" \
-        "Either the live grid could not be read for the comparison (a network failure), or the rebuild changed a Swiss height. Nothing has been uploaded." \
-        "If the lines above name a tile and a cell, send them to Claude. If they show a download error, run the same command again: finished build stages are skipped."
+        "Either the live grid could not be read for the comparison (a network failure), or the rebuild moved the Swiss heights further than a rounding or a newer survey would. Nothing has been uploaded." \
+        "If the lines above start with error: and give percentages, send them to Claude. If they show a download error, run the same command again: finished build stages are skipped."
     echo "==> comparing Swiss heights with live terrain/${TERRAIN_REFERENCE_VERSION}"
     python3 scripts/compare_grids.py sample \
         --url "${TILES_ORIGIN}/${TERRAIN_DIR}/${TERRAIN_REFERENCE_VERSION}" \
@@ -340,9 +343,43 @@ elif [ "$target" = "terrain" ]; then
         --seed "$TERRAIN_COMPARE_SEED" \
         --interior 200 --border 100
     python3 scripts/compare_grids.py "$reference" "${DIST_DIR}/${TERRAIN_DIR}" || {
-        echo "error: the rebuild changed a Swiss height; nothing was uploaded" >&2
+        echo "error: the Swiss heights moved beyond tolerance; nothing was uploaded" >&2
         exit 1
     }
+
+    # The checks verify.sh makes after the upload, made first on the local
+    # tiles with the same code: no tile at the points no source covers, and
+    # both seam profiles. A failure here costs a fix and a rerun of the cut;
+    # the same failure after the upload would leave a bad version in the
+    # bucket. Summit heights are printed and only warn: their coordinates are
+    # ours and unsurveyed, so a miss says more about a coordinate than the tiles.
+    gap_file="${DIST_DIR}/${TERRAIN_DIR}/verify-gap.json"
+    stage "checking the new tiles before uploading" \
+        "A seam profile or a no-data point in the new tiles is not what verify.sh will accept. Nothing has been uploaded." \
+        "Send Claude the box and the lines above it that start with FAIL."
+    # A swissALTI3D-only build (TERRAIN_MAPTERHORN_BBOX empty) has no fill, no
+    # seams and no verify-gap.json; it checks only the no-data points.
+    if [ -z "${TERRAIN_MAPTERHORN_BBOX:-}" ]; then
+        echo "==> checking no-data points in ${DIST_DIR}/${TERRAIN_DIR} (swissALTI3D only: no seams)"
+        python3 scripts/terrain_grid.py places --url "${DIST_DIR}/${TERRAIN_DIR}"
+    else
+        if [ ! -s "$gap_file" ]; then
+            echo "error: ${gap_file} is missing; build-terrain.sh writes it after the cut" >&2
+            exit 1
+        fi
+        echo "==> checking no-data points and summits in ${DIST_DIR}/${TERRAIN_DIR}"
+        python3 scripts/terrain_grid.py places \
+            --url "${DIST_DIR}/${TERRAIN_DIR}" --expect "$gap_file"
+        while IFS= read -r name; do
+            echo "==> checking the seam profile ${name}"
+            python3 scripts/terrain_grid.py profile "$name" \
+                --url "${DIST_DIR}/${TERRAIN_DIR}" --expect "$gap_file"
+        done < <(python3 -c '
+import json
+for p in json.load(open("scripts/verify_points.json"))["profiles"]:
+    print(p["name"])
+')
+    fi
 
     # upload.sh here, not a bespoke copy: this is tens of thousands of small
     # objects, so `sync` is doing real work — an interrupted upload resumes and
@@ -426,6 +463,7 @@ EOF
 # verify.sh's gap probe and seam profiles read what only the build knows. Print
 # it so it can be pasted on the laptop before the box is destroyed.
 gap_file="${DIST_DIR}/${TERRAIN_DIR}/verify-gap.json"
+[ -s "$gap_file" ] || gap_file="${TERRAIN_WORK_DIR}/verify-gap.json"
 if [ "$target" = "terrain" ] && [ -s "$gap_file" ]; then
     cat <<EOF
 verify.sh needs this build's ${gap_file}. Paste on the laptop:
