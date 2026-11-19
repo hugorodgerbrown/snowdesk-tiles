@@ -246,9 +246,36 @@ need_gb=100
 # about 1.5% of a z18 regional archive's bytes and 6% of a z17 one's, which over
 # the seven Alpine and Pyrenean archives comes to roughly 20-40 GB.
 [ "$target" = "dem" ] && need_gb=80
+# A rerun resumes, so the space an earlier run of the same target already
+# filled counts towards the need: those files are reused or replaced, not added
+# to. Without this a resumed terrain build, holding ~350 GB of finished
+# rasters, is refused for having "only" the ~290 GB it still has free. Only the
+# selected target's own directories are credited: another target's output, or
+# another elevation-copy version, stays on disk beside the new build, so
+# counting it would let a build start on a disk it will fill.
 free_gb=$(df -BG --output=avail . | tail -1 | tr -dc '0-9')
-if [ "${free_gb:-0}" -lt "$need_gb" ]; then
-    echo "error: ${free_gb} GB free, need ~${need_gb} GB for the ${target} build" >&2
+case $target in
+    terrain) reused=("$TERRAIN_WORK_DIR" "${DIST_DIR}/${TERRAIN_DIR}") ;;
+    # The class build starts from the terrain grid, and removes the terrain
+    # tiles before it cuts its own.
+    terrain-class) reused=("$TERRAIN_WORK_DIR" "${DIST_DIR}/${TERRAIN_DIR}"
+        "$TERRAIN_CLASS_WORK_DIR" "${DIST_DIR}/${TERRAIN_CLASS_DIR}") ;;
+    dem) reused=("${DIST_DIR}/${DEM_DIR}/${dem_version:-none}") ;;
+    *) reused=() ;;
+esac
+held_dirs=()
+for dir in "${reused[@]}"; do
+    [ -d "$dir" ] && held_dirs+=("$dir")
+done
+held_gb=0
+if [ "${#held_dirs[@]}" -gt 0 ]; then
+    echo "==> measuring what earlier ${target} runs left in ${held_dirs[*]}"
+    held_gb=$(du -s -BG "${held_dirs[@]}" | awk '{s += $1} END {print s + 0}')
+fi
+have_gb=$(( ${free_gb:-0} + held_gb ))
+echo "==> disk: ${free_gb} GB free + ${held_gb} GB from earlier ${target} runs = ${have_gb} GB, need ~${need_gb} GB"
+if [ "$have_gb" -lt "$need_gb" ]; then
+    echo "error: ${have_gb} GB available (${free_gb} GB free + ${held_gb} GB from earlier ${target} runs), need ~${need_gb} GB for the ${target} build" >&2
     exit 1
 fi
 
