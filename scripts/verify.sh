@@ -352,7 +352,7 @@ print("" if gap is None else "\t".join([gap["name"], str(gap["lon"]), str(gap["l
                 "$(status "${terrain_url}/${tx}/${ty}.s16")"
         fi
 
-        # A 2 km line across the border at 5 m: every covered cell has a height,
+        # A 10 km line across the border at 5 m: every covered cell has a height,
         # and the two sources agree at the seam within 3 m. If the foreign side
         # has no national model, it must read no height at all.
         while IFS= read -r name; do

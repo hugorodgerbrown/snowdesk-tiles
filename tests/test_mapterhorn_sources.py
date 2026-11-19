@@ -297,8 +297,22 @@ def test_the_seam_is_where_swissalti3d_stops() -> None:
     distances = [-10.0, -5.0, 0.0, 5.0, 10.0]
 
     assert seam_from_swiss(distances, [True, True, False, False, False]) == -2.5
-    with pytest.raises(ValueError, match="does not stop"):
+    with pytest.raises(ValueError, match="covers all 20 m of it"):
         seam_from_swiss(distances, [True] * 5)
+
+
+def test_a_profile_with_no_swiss_heights_says_so() -> None:
+    distances = [-10.0, -5.0, 0.0, 5.0, 10.0]
+
+    with pytest.raises(ValueError, match="none of its 20 m has a Swiss height"):
+        seam_from_swiss(distances, [False] * 5)
+
+
+def test_a_profile_pointing_into_switzerland_says_turn_it_round() -> None:
+    distances = [-10.0, -5.0, 0.0, 5.0, 10.0]
+
+    with pytest.raises(ValueError, match="turn it round"):
+        seam_from_swiss(distances, [False, False, True, True, True])
 
 
 def test_intervals_are_runs_of_covered_samples() -> None:
