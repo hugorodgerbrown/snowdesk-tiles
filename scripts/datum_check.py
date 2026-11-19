@@ -16,13 +16,20 @@ the two. The ground compared is flat — under 1 degree — so the natural rise
 across the two 25 m strips (50 m at most) is under 0.9 m, and a true datum
 step is not hidden in a slope.
 
-**What is compared.** At each crossing in datum_points.json, a 300 m window is
-warped from both sources onto the grid's 5 m EPSG:3035 cells exactly as the
-build will warp them. The border is where swissALTI3D's data stops. Within
-100 m of the crossing — a 200 m stretch of border — the Swiss strip is the
-swissALTI3D cells within 25 m of the border, and the foreign strip the
+**What is compared.** Round each crossing in datum_points.json, a search box
+up to 2.5 km from it is warped from both sources onto the grid's 5 m EPSG:3035
+cells exactly as the build will warp them. The seam that matters is where
+swissALTI3D's data stops, since the build lays swissALTI3D over the national
+model wherever it has heights: not the border itself, because swissALTI3D
+carries on past the border by a few hundred metres in places (measured on the
+VM, 19 Nov 2026: all 300 m round the Diepoldsau, Konstanz and Stabio crossings).
+At the seam point nearest the crossing, a 300 m window is cut out; within
+100 m of the seam point — a 200 m stretch of it — the Swiss strip is the
+swissALTI3D cells within 25 m of the seam, and the foreign strip the
 national-model cells within 25 m of it on the other side, clipped to the
-coverage polygons the build will clip to. Only cells with a slope under 1
+coverage polygons the build will clip to. Where that stretch is too steep, the
+next seam point at least 200 m along is tried, up to 25 of them; a stretch
+that has enough flat cells decides, pass or fail. Only cells with a slope under 1
 degree count, each side needs 20 of them, and the mean heights must agree
 within 1.0 m. Too few flat cells fails loudly: a check that could not look is
 not a check that passed. There is no flag to skip it.
@@ -46,7 +53,7 @@ import shutil
 import subprocess
 import sys
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -65,6 +72,8 @@ MIN_FLAT_CELLS = 20
 STRIP_M = 25.0
 HALF_LINE_M = 100.0
 WINDOW_HALF_M = 150.0
+SEARCH_HALF_M = 2500.0
+MAX_SEAM_TRIES = 25
 
 Grid = NDArray[np.float64]
 Mask = NDArray[np.bool_]
@@ -183,15 +192,87 @@ def strips(
     return swiss_strip, foreign_strip
 
 
+def assess_nearest_seam(
+    swiss: Grid,
+    foreign: Grid,
+    cell_m: float = CELL_SIZE_M,
+    tries: int = MAX_SEAM_TRIES,
+) -> DatumResult:
+    """Assess the seam nearest the centre of a search grid. Pure.
+
+    The seam is the Swiss cells next to foreign-only cells: where the build's
+    composite switches from swissALTI3D to the national model. Seam points are
+    taken nearest the centre first, each at least 200 m from those already
+    tried; the first whose window has enough flat cells on both sides decides.
+    """
+    swiss_valid = ~np.isnan(swiss)
+    foreign_only = ~swiss_valid & ~np.isnan(foreign)
+    seam = swiss_valid & _dilate(foreign_only, 1)
+    half = round(WINDOW_HALF_M / cell_m)
+    rows, cols = swiss.shape
+    # Only seam points whose whole window lies inside the search grid.
+    seam[:half, :] = seam[rows - half :, :] = False
+    seam[:, :half] = seam[:, cols - half :] = False
+    if not np.any(seam):
+        if not np.any(foreign_only):
+            where = (
+                "swissALTI3D covers the whole search box"
+                if np.all(swiss_valid)
+                else "the foreign side holds no national-model cells; the "
+                "crossing may lie outside every national model's coverage"
+            )
+        else:
+            where = "swissALTI3D and the national model never meet in it"
+        return DatumResult(
+            0,
+            0,
+            None,
+            None,
+            False,
+            f"no seam within {SEARCH_HALF_M - WINDOW_HALF_M:g} m of the crossing: "
+            + where,
+        )
+
+    seam_rows, seam_cols = np.nonzero(seam)
+    distance = np.hypot(
+        (seam_rows - (rows - 1) / 2) * cell_m, (seam_cols - (cols - 1) / 2) * cell_m
+    )
+    tried: list[tuple[int, int]] = []
+    result: DatumResult | None = None
+    for index in np.argsort(distance, kind="stable"):
+        r, c = int(seam_rows[index]), int(seam_cols[index])
+        if any(
+            math.hypot(r - r0, c - c0) * cell_m < 2 * HALF_LINE_M for r0, c0 in tried
+        ):
+            continue
+        tried.append((r, c))
+        cut = (slice(r - half, r + half), slice(c - half, c + half))
+        s_win, f_win = swiss[cut], foreign[cut]
+        swiss_strip, foreign_strip = strips(s_win, f_win, cell_m)
+        result = assess(s_win, swiss_strip, f_win, foreign_strip, cell_m)
+        result = replace(
+            result,
+            reason=f"{result.reason}, at the seam {distance[index]:.0f} m "
+            "from the crossing",
+        )
+        if result.swiss_mean_m is not None or len(tried) >= tries:
+            return result
+    if result is None:  # unreachable: the seam held at least one point
+        raise RuntimeError("no seam point was tried")
+    return result
+
+
 # --- Fetching and warping one window -------------------------------------------
 
 
-def window(lon: float, lat: float) -> tuple[float, float, float, float]:
+def window(
+    lon: float, lat: float, half_m: float = WINDOW_HALF_M
+) -> tuple[float, float, float, float]:
     """Return a cell-aligned (west, south, east, north) window round a point."""
     easting, northing = lonlat_to_grid(lon, lat)
-    west = math.floor((easting - WINDOW_HALF_M) / CELL_SIZE_M) * CELL_SIZE_M
-    south = math.floor((northing - WINDOW_HALF_M) / CELL_SIZE_M) * CELL_SIZE_M
-    side = 2 * WINDOW_HALF_M
+    west = math.floor((easting - half_m) / CELL_SIZE_M) * CELL_SIZE_M
+    south = math.floor((northing - half_m) / CELL_SIZE_M) * CELL_SIZE_M
+    side = 2 * half_m
     return west, south, west + side, south + side
 
 
@@ -250,10 +331,10 @@ def _warp(
 def crossing_box(lon: float, lat: float) -> tuple[float, float, float, float]:
     """Return the (west, south, east, north) box fetched round a crossing.
 
-    About 900 m a side: it holds the 200 m line and its strips with room for
-    the border to sit anywhere the search allows.
+    About 6 km a side: it holds the 5 km search grid in EPSG:3035 with a
+    margin, at every crossing's latitude (a test checks it).
     """
-    return (lon - 0.006, lat - 0.004, lon + 0.006, lat + 0.004)
+    return (lon - 0.04, lat - 0.027, lon + 0.04, lat + 0.027)
 
 
 def check_crossing(
@@ -263,7 +344,7 @@ def check_crossing(
     name = str(crossing["name"])
     lon, lat = float(crossing["lon"]), float(crossing["lat"])
     here = work / "".join(ch if ch.isalnum() else "-" for ch in name)
-    te = window(lon, lat)
+    te = window(lon, lat, SEARCH_HALF_M)
     box = crossing_box(lon, lat)
 
     chosen = fetch_swissalti3d.select(fetch_swissalti3d.items(box), gsd)
@@ -287,8 +368,7 @@ def check_crossing(
 
     swiss = _warp(tifs, te, here / "swiss.raw", None)
     foreign = _warp([mosaic], te, here / "mapterhorn.raw", clip)
-    swiss_strip, foreign_strip = strips(swiss, foreign)
-    return assess(swiss, swiss_strip, foreign, foreign_strip)
+    return assess_nearest_seam(swiss, foreign)
 
 
 def load_points(path: Path = POINTS) -> list[dict[str, Any]]:
