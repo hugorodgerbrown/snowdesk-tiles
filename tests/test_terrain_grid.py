@@ -444,11 +444,39 @@ def test_a_half_metre_step_passes_and_a_four_metre_step_fails() -> None:
 
 
 def test_a_continuing_slope_is_not_a_step() -> None:
-    # Why a fit rather than the two nearest cells: on a 10% ramp, neighbours
-    # 5 m apart differ by half a metre with no seam at all.
+    # Why the neighbours' jumps are subtracted: on a 10% ramp, cells 5 m apart
+    # differ by half a metre with no seam at all.
     from terrain_grid import seam_step
 
     assert seam_step(*ramp(0.0), seam_m=2.5) == pytest.approx(0.0, abs=1e-9)
+
+
+def test_a_slope_that_turns_at_a_blended_seam_is_not_a_step() -> None:
+    # Theodul after the blend (20 Nov 2026): downhill to the seam, uphill
+    # after it, every 5 m jump under 2 m. Two fitted lines called it 4.6 m.
+    from terrain_grid import seam_step
+
+    distances = [3040.0 + 5 * i for i in range(20)]
+    heights: list[float | None] = [
+        3195.5, 3195.2, 3195.0, 3196.3, 3197.75, 3199.4, 3201.0, 3202.5, 3204.0,
+        3205.5, 3207.0, 3208.4, 3209.75, 3210.25, 3210.75, 3210.1, 3209.5,
+        3209.1, 3208.75, 3207.5,
+    ]  # fmt: skip
+
+    assert seam_step(distances, heights, seam_m=3082.5) < 0.5
+
+
+def test_theodul_before_the_blend_is_a_step() -> None:
+    from terrain_grid import seam_step
+
+    distances = [3040.0 + 5 * i for i in range(20)]
+    heights: list[float | None] = [
+        3195.0, 3193.0, 3191.0, 3190.2, 3189.5, 3188.6, 3187.75, 3186.9, 3186.0,
+        3207.0, 3208.4, 3209.75, 3210.25, 3210.75, 3210.1, 3209.5, 3209.1,
+        3208.75, 3207.5, 3206.25,
+    ]  # fmt: skip
+
+    assert seam_step(distances, heights, seam_m=3082.5) == pytest.approx(19.0)
 
 
 def test_a_side_with_too_few_heights_has_no_step() -> None:
