@@ -1,5 +1,5 @@
 {
-  "_comment": "SNOW-1505. Named places verify.sh checks the published terrain grid against outside Switzerland. Summits: the published height of each national mapping agency, accepted from 15 m below to 2 m above (a 5 m cell averages a summit down; it never builds one up). Coordinates are the summits' published WGS84 positions as best known (coordinates_source), not surveyed by us. Profiles: a 10 km line across the border, centred on it, bearing pointing out of Switzerland. Absent: ground no source covers, which must answer 204.",
+  "_comment": "SNOW-1505. Named places verify.sh checks the published terrain grid against outside Switzerland. Summits: the published height of each national mapping agency, accepted from 15 m below to 2 m above (a 5 m cell averages a summit down; it never builds one up), at the highest cell within 100 m of the coordinate. Coordinates are the summits' published WGS84 positions as best known (coordinates_source), not surveyed by us; the highest cell lay 10-80 m from them on the first Alps-wide build. Profiles: a 10 km line across the border, centred on it, bearing pointing out of Switzerland. Absent: ground no source covers, which must answer 204.",
   "tolerance": {"below_m": 15, "above_m": 2},
   "summits": [
     {

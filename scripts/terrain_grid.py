@@ -836,6 +836,67 @@ def check_summits(
     return failures
 
 
+#: How far from a summit's listed coordinate to look for its highest cell.
+#: The coordinates are public WGS84 positions, not surveyed by us, and on the
+#: first Alps-wide build (20 Nov 2026) every summit's highest cell lay 10-80 m
+#: from them; at the coordinate itself the grid read up to 88 m low.
+SUMMIT_SEARCH_M = 100
+
+
+def summit_heights(
+    base: str,
+    summits: list[dict[str, Any]],
+    fetch: Callable[[str], bytes | None],
+    radius_m: int = SUMMIT_SEARCH_M,
+) -> list[float | None]:
+    """Return each summit's highest stored height within ``radius_m``."""
+    tiles: dict[tuple[int, int], bytes | None] = {}
+    heights: list[float | None] = []
+    for summit in summits:
+        easting, northing = lonlat_to_grid(float(summit["lon"]), float(summit["lat"]))
+        best: float | None = None
+        for dx in range(-radius_m, radius_m + 1, CELL_SIZE_M):
+            for dy in range(-radius_m, radius_m + 1, CELL_SIZE_M):
+                if dx * dx + dy * dy > radius_m * radius_m:
+                    continue
+                cell = cell_for(easting + dx, northing + dy)
+                key = (cell.tile_x, cell.tile_y)
+                if key not in tiles:
+                    tiles[key] = fetch(
+                        f"{base.rstrip('/')}/{cell.tile_x}/{cell.tile_y}.s16"
+                    )
+                body = tiles[key]
+                height = None if body is None else read_cell(body, cell.row, cell.col)
+                if height is not None and (best is None or height > best):
+                    best = height
+        heights.append(best)
+    return heights
+
+
+def _print_summits(base: str, points: Path) -> list[str]:
+    """Print each summit's highest nearby height; return the misses."""
+    summits: list[dict[str, Any]] = json.loads(points.read_text(encoding="utf-8"))[
+        "summits"
+    ]
+    heights = summit_heights(base, summits, tile_reader(base))
+    for summit, height in zip(summits, heights, strict=True):
+        shown = "no height" if height is None else f"{height:.2f} m"
+        print(
+            f"{summit['name']}: {shown} within {SUMMIT_SEARCH_M} m "
+            f"(published {summit['height_m']} m)"
+        )
+    return check_summits(summits, heights)
+
+
+def _cmd_summits(args: argparse.Namespace) -> int:
+    # verify.sh's summit check: the highest cell near each listed summit must
+    # be within its band of the agency's published height.
+    failures = _print_summits(args.url, args.points)
+    for failure in failures:
+        print(f"FAIL {failure}")
+    return 1 if failures else 0
+
+
 def tile_exists(
     base: str, lon: float, lat: float, fetch: Callable[[str], bytes | None]
 ) -> bool:
@@ -848,19 +909,10 @@ def _cmd_places(args: argparse.Namespace) -> int:
     # The named places verify.sh checks after the upload, run against a local
     # tree before it. A point no source covers that holds a tile fails: the
     # build put heights where it promised none. A summit outside its band only
-    # warns. The summit coordinates are ours, from public pages, not surveyed
-    # (verify_points.json), so a miss is more likely a coordinate than the
-    # tiles, and verify.sh reports it again after the upload.
+    # warns here; verify.sh's summit check fails on it after the upload.
     document = json.loads(args.points.read_text(encoding="utf-8"))
-    summits: list[dict[str, Any]] = document["summits"]
     fetch = tile_reader(args.url)
-    heights = sample_heights(
-        args.url, [(float(s["lon"]), float(s["lat"])) for s in summits], fetch
-    )
-    for summit, height in zip(summits, heights, strict=True):
-        shown = "no height" if height is None else f"{height:.2f} m"
-        print(f"{summit['name']}: {shown} (published {summit['height_m']} m)")
-    for warning in check_summits(summits, heights):
+    for warning in _print_summits(args.url, args.points):
         print(f"WARN {warning}")
 
     absent: list[dict[str, Any]] = list(document.get("absent", []))
@@ -956,6 +1008,15 @@ def main(argv: list[str] | None = None) -> int:
     )
     p_places.add_argument("--points", type=Path, default=VERIFY_POINTS)
     p_places.set_defaults(func=_cmd_places)
+
+    p_summits = sub.add_parser(
+        "summits", help="fail on a summit whose nearby highest cell is out of band"
+    )
+    p_summits.add_argument(
+        "--url", required=True, help="terrain/<version> base URL, or a local tile tree"
+    )
+    p_summits.add_argument("--points", type=Path, default=VERIFY_POINTS)
+    p_summits.set_defaults(func=_cmd_summits)
 
     p_gdal = sub.add_parser("gdal-args", help="values the GDAL steps need")
     p_gdal.add_argument("what", choices=["dstnodata", "scale", "cell-size"])

@@ -564,6 +564,48 @@ else
     echo "$grid_source" >"${raw}.source"
 fi
 
+# --- 4b. Mapterhorn: blend swissALTI3D's edge into the fill ------------------
+#
+# Where swissALTI3D stops, the grid steps to the national model's height. On a
+# glacier surveyed in different years the step is tens of metres (21 m at
+# Theodul), which the class tiles would draw as a cliff. blend_seam.py ramps
+# the last 250 m of swissALTI3D into the fill; see it for the rule. It reads
+# the two sources from Int16 windows cut round swissALTI3D's coverage with
+# grid.raw's own -scale, and edits grid.raw in place. Done again whenever the
+# grid is quantised again, and otherwise once.
+if [ "$mapterhorn" = 1 ]; then
+    stage "blending swissALTI3D's edge into the fill" \
+        "Usually the disk is full (df -h / shows it) or memory ran out (free -g). Nothing has been uploaded." \
+        "Run the same command again: finished stages are skipped. If it stops here twice, send Claude the box and the 20 lines above it."
+    blend_stamp="${raw}.blend"
+    if [ -s "$blend_stamp" ] && [ "$blend_stamp" -nt "${raw}.extent" ] \
+        && [ "${FORCE_TERRAIN:-0}" != "1" ]; then
+        echo "==> swissALTI3D's edge already blended ($(cat "$blend_stamp")) — skipping"
+    else
+        read -r b_x b_y b_w b_h < <("$python" scripts/blend_seam.py window \
+            --manifest "$swiss_manifest" \
+            --west "$te_w" --north "$te_n" --cols "$cols" --rows "$rows")
+        echo "==> blending swissALTI3D's edge: window ${b_w}x${b_h} at (${b_x}, ${b_y})"
+        for pair in "swiss:${warped}" "fill:${mapterhorn_tif}"; do
+            name=${pair%%:*} source=${pair#*:}
+            gdal_translate -q \
+                -of ENVI \
+                -ot Int16 \
+                -scale "$s_min" "$s_max" "$d_min" "$d_max" \
+                -a_nodata "$d_min" \
+                -srcwin "$b_x" "$b_y" "$b_w" "$b_h" \
+                "$source" "${work}/blend-${name}.raw"
+            echo "    ${name} window cut"
+        done
+        "$python" scripts/blend_seam.py blend \
+            --raw "$raw" --cols "$cols" --rows "$rows" \
+            --swiss "${work}/blend-swiss.raw" --fill "${work}/blend-fill.raw" \
+            --xoff "$b_x" --yoff "$b_y" --width "$b_w" --height "$b_h"
+        rm -f "${work}"/blend-swiss.* "${work}"/blend-fill.*
+        echo "250 m, window ${b_w}x${b_h} at (${b_x}, ${b_y})" >"$blend_stamp"
+    fi
+fi
+
 # ENVI writes in the host's byte order. Every machine anyone will run this on is
 # little-endian, which is what the published tiles claim to be — but a silently
 # byte-swapped grid would decode as noise on the Django side rather than fail,

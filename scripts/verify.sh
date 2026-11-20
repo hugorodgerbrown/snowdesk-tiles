@@ -303,16 +303,28 @@ print(first, credits)
     # (a 5 m cell averages a summit down) to 2 m above; the list, with where
     # each number comes from, is scripts/verify_points.json.
     elevation "Innsbruck (AT, valley)" 11.3933 47.2692 550 650
-    while IFS=$'\t' read -r name lon lat low high; do
-        elevation "$name" "$lon" "$lat" "$low" "$high"
-    done < <(python3 -c '
-import json
-doc = json.load(open("scripts/verify_points.json"))
-for s in doc["summits"]:
-    t = s["tolerance"]
-    print("\t".join([s["name"], str(s["lon"]), str(s["lat"]),
-                     str(s["height_m"] - t["below_m"]), str(s["height_m"] + t["above_m"])]))
-')
+    # A summit is checked at its highest cell within 100 m of the listed
+    # coordinate, which is a public position rather than a survey: at the
+    # coordinate itself the first Alps-wide grid read up to 88 m low, while the
+    # highest cell nearby was within 10 m of every published height.
+    if summit_lines=$(python3 scripts/terrain_grid.py summits --url "$terrain_url" 2>&1); then
+        while IFS= read -r line; do
+            printf '  ok    terrain: %s\n' "$line"
+        done <<<"$summit_lines"
+    else
+        while IFS= read -r line; do
+            case $line in
+                FAIL\ *) printf '  FAIL  terrain: %s\n' "${line#FAIL }"
+                    failures=$((failures + 1)) ;;
+                *) printf '        terrain: %s\n' "$line" ;;
+            esac
+        done <<<"$summit_lines"
+        case $summit_lines in
+            *FAIL\ *) ;;
+            *) printf '  FAIL  terrain: the summit check could not run\n'
+                failures=$((failures + 1)) ;;
+        esac
+    fi
 
     # The honest-unknown path, and the one the blocked tickets depend on most.
     # Outside every source there is no height, and the caller has to be able to
