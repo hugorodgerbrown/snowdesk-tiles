@@ -650,7 +650,7 @@ def test_places_cli_passes_on_a_good_local_tree(
     assert main(["places", "--url", str(tmp_path), "--expect", str(expect)]) == 0
 
     out = capsys.readouterr().out
-    assert "Zugspitze (DE): 2957.00 m (published 2962 m)" in out
+    assert "Zugspitze (DE): 2957.00 m within 100 m (published 2962 m)" in out
     assert "Lyon: no tile, as expected" in out
     assert "Gap: no tile, as expected" in out
 
@@ -673,3 +673,40 @@ def test_places_cli_fails_on_a_stray_tile_and_warns_on_a_summit(
 
     assert main(["places", "--url", str(tmp_path)]) == 1
     assert "FAIL Lyon: a tile exists where none should" in capsys.readouterr().out
+
+
+def test_a_summit_reads_its_highest_cell_near_the_listed_coordinate(
+    tmp_path: Path,
+) -> None:
+    from terrain_grid import read_local_tile, summit_heights
+
+    lon, lat = 12.69444, 47.07472
+    write_tile_at(tmp_path, lon, lat, 3740.0)
+    cell = cell_for(*lonlat_to_grid(lon, lat))
+    tile = tmp_path / str(cell.tile_x) / f"{cell.tile_y}.s16"
+    body = bytearray(tile.read_bytes())
+    # The real summit, 9 cells (45 m) east of the listed coordinate.
+    peak = (cell.row * STORED_CELLS + cell.col + 9) * 2
+    body[peak : peak + 2] = struct.pack("<h", encode_height(3796.0))
+    tile.write_bytes(bytes(body))
+    summit = {"lon": lon, "lat": lat}
+
+    assert summit_heights(str(tmp_path), [summit], read_local_tile) == [3796.0]
+    assert summit_heights(str(tmp_path), [summit], read_local_tile, 40) == [3740.0]
+
+
+def test_summits_cli_fails_on_a_summit_out_of_band(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from terrain_grid import main
+
+    places_tree(tmp_path)
+    assert main(["summits", "--url", str(tmp_path)]) == 0
+
+    zugspitze = next(s for s in verify_points()["summits"] if "Zugspitze" in s["name"])
+    write_tile_at(tmp_path, zugspitze["lon"], zugspitze["lat"], 2900.0)
+
+    assert main(["summits", "--url", str(tmp_path)]) == 1
+    assert "FAIL Zugspitze (DE): 2900.00 m, expected 2947-2964 m" in (
+        capsys.readouterr().out
+    )

@@ -40,6 +40,7 @@ entry) lives in `snowdesk-data-pipeline` under SNOW-242.
 | `scripts/mapterhorn_sources.py` | Picks the national models Mapterhorn holds (never GLO-30), writes the clip polygons and the credits, widens the manifest, and writes `verify-gap.json`. `probe` lists what Mapterhorn publishes. |
 | `scripts/datum_check.py` | Stops the terrain build if heights step by over 3 m where swissALTI3D meets the national models, near the crossings in `scripts/datum_points.json`. |
 | `scripts/composite-terrain.sh` | Composites the warped Mapterhorn fill under the unchanged swissALTI3D warp. |
+| `scripts/blend_seam.py` | Ramps the last 250 m of swissALTI3D into the Mapterhorn fill, so a survey-date step at its edge becomes a gentle slope. |
 | `scripts/compare_grids.py` | Fails if a rebuilt grid moved the reference grid's heights beyond tolerance (over 1% by more than 2 m, heights lost, a mean shift); `sample` fetches the reference from the live grid. |
 | `scripts/build-terrain.sh` | Runs the above plus GDAL → `dist/terrain/`: swissALTI3D, and the Alps beyond from the elevation copy. One-off; needs ~400 GB. |
 | `scripts/terrain_class.py` | The terrain-class pixel contract and kernel (a copy of `sample_slope`'s). |
@@ -869,7 +870,10 @@ Liechtenstein. Our Mapterhorn copy fills the rest of the supported area, read
 at z14 and clipped to the coverage of the national models it carries: BEV in
 Austria, IGN in France, the Bolzano and Trento provinces, Bavaria, and the
 others that `grid.json`'s `credits[]` lists. swissALTI3D wins every cell it
-fills. Before the upload, `compare_grids.py` compares 300 tiles of the live
+fills, except the last 250 m before its edge, which `blend_seam.py` ramps into
+the national model's height: on a glacier surveyed in a different year the two
+can differ by 20 m (Theodul), which the class tiles would otherwise draw as a
+cliff. Before the upload, `compare_grids.py` compares 300 tiles of the live
 grid with the build and stops the publish if the Swiss heights moved further
 than a rebuild should move them: over 1% of cells by more than 2 m, heights
 lost, or a shift on average. Quarter-metre rounding and swisstopo's newer
