@@ -444,7 +444,7 @@ def test_a_half_metre_step_passes_and_a_four_metre_step_fails() -> None:
 
 
 def test_a_continuing_slope_is_not_a_step() -> None:
-    # Why the neighbours' jumps are subtracted: on a 10% ramp, cells 5 m apart
+    # Why the ground's trend is subtracted: on a 10% ramp, cells 5 m apart
     # differ by half a metre with no seam at all.
     from terrain_grid import seam_step
 
@@ -476,7 +476,21 @@ def test_theodul_before_the_blend_is_a_step() -> None:
         3208.75, 3207.5, 3206.25,
     ]  # fmt: skip
 
-    assert seam_step(distances, heights, seam_m=3082.5) == pytest.approx(19.0)
+    assert seam_step(distances, heights, seam_m=3082.5) == pytest.approx(20.75)
+
+
+@pytest.mark.parametrize(("slope", "offset"), [(-0.1, 4.0), (0.5, -4.0), (0.5, 4.0)])
+def test_an_offset_shows_in_full_whichever_way_the_ground_slopes(
+    slope: float, offset: float
+) -> None:
+    from terrain_grid import seam_step
+
+    distances = [-500.0 + 5 * i for i in range(201)]
+    heights: list[float | None] = [
+        2000.0 + slope * d + (offset if d > 0 else 0.0) for d in distances
+    ]
+
+    assert seam_step(distances, heights, seam_m=2.5) == pytest.approx(4.0)
 
 
 def test_a_side_with_too_few_heights_has_no_step() -> None:

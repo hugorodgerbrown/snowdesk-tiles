@@ -465,9 +465,10 @@ def lonlat_extent(
 # national model, and asks two things of it: that every cell a source covers
 # has a height, and that the two sources agree where they meet. "Agree" is a
 # seam step: the jump between the two heights either side of the seam, less
-# the largest jump between neighbouring heights within 50 m of it. Less that,
-# because a slope that carries on across the border would otherwise read as a
-# step one cell's rise high. See seam_step for why not two fitted lines.
+# the ground's own trend there (the neighbouring differences either side of
+# it). Less that, because a slope that carries on across the border would
+# otherwise read as a step one cell's rise high. See seam_step for why not two
+# fitted lines.
 
 #: Profile defaults: a 2 km line, sampled every 5 m — the cell size. The two
 #: listed profiles override the length with 10 km (5 km each side of the
@@ -527,19 +528,19 @@ def seam_step(
     seam_m: float,
     fit_m: float = SEAM_FIT_M,
 ) -> float:
-    """Return how far the jump across the seam exceeds the ground either side.
+    """Return how far the jump across the seam departs from the ground's trend.
 
-    The jump is between the last height before the seam and the first after
-    it. The ground's own jumps are those between neighbouring heights within
-    ``fit_m`` of the seam on either side; the largest of them is what a step
-    of that size would be with no seam at all, so only the excess counts. A
-    datum offset or an unblended survey-date step (21 m at Theodul on 20 Nov
-    2026, against neighbouring jumps of about 1 m) shows in full; a slope that
-    simply carries on, or turns, across a blended seam shows as nothing.
+    The jump is the signed difference between the last height before the seam
+    and the first after it. The ground's trend there is the mean of the two
+    neighbouring differences either side of that jump — the last on the near
+    side and the first on the far side — which is what the jump would be with
+    no seam at all. The step is how far the jump departs from it, so a datum
+    offset shows in full whichever way the ground slopes, and a slope that
+    carries on across the seam shows as nothing.
 
-    Two straight lines fitted to each side, which this replaced, measured 4.6 m
-    at Theodul after the blend, where the slope turns from downhill to uphill
-    across the seam while every 5 m jump stayed under 2 m.
+    Two straight lines fitted to 50 m each side, which this replaced, measured
+    4.6 m at Theodul after the blend (20 Nov 2026), where the slope turns from
+    downhill to uphill across the seam while every 5 m jump stayed under 2 m.
     """
     sides: list[list[float]] = [[], []]
     for distance, height in zip(distances, heights, strict=True):
@@ -556,11 +557,9 @@ def seam_step(
                 "the seam; a step needs neighbouring heights on both sides"
             )
     near, far = sides
-    jump = abs(far[0] - near[-1])
-    ground = max(
-        abs(b - a) for side in sides for a, b in zip(side, side[1:], strict=False)
-    )
-    return max(jump - ground, 0.0)
+    jump = far[0] - near[-1]
+    trend = ((near[-1] - near[-2]) + (far[1] - far[0])) / 2
+    return abs(jump - trend)
 
 
 def assess_profile(
