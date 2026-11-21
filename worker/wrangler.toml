@@ -46,5 +46,6 @@ PMTILES_KEY = "snowdesk.pmtiles"
 # from the app side, not a config gap. staging.snowdesk.info is the staging
 # site's own domain; the onrender.com hostname stays while it still answers.
 # 127.0.0.1 is listed alongside localhost because a browser treats them as
-# distinct origins.
-ALLOWED_ORIGINS = "https://snowdesk.info https://www.snowdesk.info https://staging.snowdesk.info https://snowdesk-staging.onrender.com http://localhost:8000 http://127.0.0.1:8000"
+# distinct origins. gpx.snowdesk.info is the GPX Explorer (SNOW-1540), served by
+# the same Django service on its own host; it has no staging host of its own.
+ALLOWED_ORIGINS = "https://snowdesk.info https://www.snowdesk.info https://gpx.snowdesk.info https://staging.snowdesk.info https://snowdesk-staging.onrender.com http://localhost:8000 http://127.0.0.1:8000"
