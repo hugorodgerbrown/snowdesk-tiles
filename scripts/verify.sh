@@ -11,6 +11,25 @@ cd "$(dirname "$0")/.."
 source scripts/config.sh
 # shellcheck source=scripts/failure.sh
 source scripts/failure.sh
+
+# The helper scripts need the repo's Python (3.12+, as pyproject.toml says):
+# macOS ships 3.9 as python3, which gets halfway through the terrain checks
+# before a traceback. Check up front, as build.sh does. PYTHON must be a path
+# to an interpreter, not a command line — it is invoked quoted.
+python=${PYTHON:-python3}
+
+if ! "$python" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 12) else 1)' 2>/dev/null; then
+    found=$("$python" -c 'import sys; print("Python %d.%d" % sys.version_info[:2])' 2>/dev/null || echo "not found")
+    cat >&2 <<EOT
+error: ${python} is not a usable Python 3.12+ interpreter (${found})
+
+Point PYTHON at a newer one. With uv:
+
+    PYTHON=\$(uv python find 3.12) ./scripts/verify.sh
+EOT
+    exit 1
+fi
+
 stage "verifying the published tiles" \
     "A check failed, or could not run (the network, or a file it reads such as verify-gap.json is missing). The line just above says which. The tiles stay published either way." \
     "Send Claude the box and the 30 lines above it."
@@ -89,11 +108,11 @@ check "tilejson responds" 200 \
 # than against config.sh, so a rebuild that changes the range and a style that
 # was not rebuilt with it cannot agree by accident.
 #
-# Parsed with python3 rather than sed: the vector source's own tiles template
+# Parsed with Python rather than sed: the vector source's own tiles template
 # contains `{z}/{x}/{y}`, so any attempt to slice its JSON object on braces
 # stops inside the URL. Every other script here already needs an interpreter.
 zoom_range() {
-    python3 -c '
+    "$python" -c '
 import json, sys
 doc = json.load(sys.stdin)
 source = doc.get("sources", {}).get(sys.argv[1], doc) if sys.argv[1] else doc
@@ -121,7 +140,7 @@ check "style declares vector maxzoom" "$want_max" "$got_max"
 # Not folded into zoom_range: the value contains spaces, so `read -r a b` would
 # split it across fields.
 attribution() {
-    python3 -c '
+    "$python" -c '
 import json, sys
 doc = json.load(sys.stdin)
 source = doc.get("sources", {}).get(sys.argv[1], doc) if sys.argv[1] else doc
@@ -205,7 +224,7 @@ else
     # Only the geometry and encoding are compared. Coverage, provenance and the
     # URL template legitimately differ between a definition and a build.
     contract() {
-        python3 -c '
+        "$python" -c '
 import json, sys
 doc = json.load(sys.stdin)
 keys = ["grid", "crs", "cell_size_m", "tile_cells", "skirt_cells",
@@ -216,7 +235,7 @@ print(json.dumps({k: doc.get(k) for k in keys}, sort_keys=True))
 ' 2>/dev/null || echo "<unreadable>"
     }
 
-    want_grid=$(python3 scripts/terrain_grid.py definition | contract)
+    want_grid=$("$python" scripts/terrain_grid.py definition | contract)
     got_grid=$(curl -s "${terrain_url}/grid.json" | contract)
     check "terrain grid matches scripts/terrain_grid.py" "$want_grid" "$got_grid"
 
@@ -225,7 +244,7 @@ print(json.dumps({k: doc.get(k) for k in keys}, sort_keys=True))
     # a credit per national model. A mosaic published without its credits is a
     # licence breach that renders perfectly.
     sources_shape() {
-        python3 -c '
+        "$python" -c '
 import json, sys
 doc = json.load(sys.stdin)
 sources = doc.get("sources") or []
@@ -243,7 +262,7 @@ print(first, credits)
     # A tile is a fixed-size array, and the size is the contract. A short body
     # decodes as garbage from the first row rather than failing, so the length
     # is worth asserting on its own.
-    tile_bytes=$(python3 -c \
+    tile_bytes=$("$python" -c \
         'import sys; sys.path.insert(0, "scripts"); import terrain_grid; print(terrain_grid.TILE_BYTES)')
 
     # Named places again, and for the same reason as the vector coverage checks
@@ -259,7 +278,7 @@ print(first, credits)
         local label=$1 lon=$2 lat=$3 low=$4 high=$5
         local tx ty row col body_size height
 
-        read -r tx ty row col < <(python3 scripts/terrain_grid.py cell "$lon" "$lat")
+        read -r tx ty row col < <("$python" scripts/terrain_grid.py cell "$lon" "$lat")
         body_size=$(curl -s -o /dev/null -w '%{size_download}' \
             "${terrain_url}/${tx}/${ty}.s16")
         if [ "$body_size" != "$tile_bytes" ]; then
@@ -270,7 +289,7 @@ print(first, credits)
         fi
 
         height=$(curl -s "${terrain_url}/${tx}/${ty}.s16" \
-            | python3 scripts/terrain_grid.py read-cell "$row" "$col")
+            | "$python" scripts/terrain_grid.py read-cell "$row" "$col")
         if [ "$height" = "nodata" ] || [ "$height" = "short" ]; then
             printf '  FAIL  terrain: %s reads %s, expected %s-%s m\n' \
                 "$label" "$height" "$low" "$high"
@@ -307,7 +326,7 @@ print(first, credits)
     # coordinate, which is a public position rather than a survey: at the
     # coordinate itself the first Alps-wide grid read up to 88 m low, while the
     # highest cell nearby was within 10 m of every published height.
-    if summit_lines=$(python3 scripts/terrain_grid.py summits --url "$terrain_url" 2>&1); then
+    if summit_lines=$("$python" scripts/terrain_grid.py summits --url "$terrain_url" 2>&1); then
         while IFS= read -r line; do
             printf '  ok    terrain: %s\n' "$line"
         done <<<"$summit_lines"
@@ -331,10 +350,10 @@ print(first, credits)
     # tell that from a valid one — 204, not a 404 and certainly not a zero.
     # SNOW-839 and SNOW-910 both turn on absent never rendering as gentle.
     while IFS=$'\t' read -r name lon lat; do
-        read -r tx ty _ _ < <(python3 scripts/terrain_grid.py cell "$lon" "$lat")
+        read -r tx ty _ _ < <("$python" scripts/terrain_grid.py cell "$lon" "$lat")
         check "terrain is 204 outside coverage (${name})" 204 \
             "$(status "${terrain_url}/${tx}/${ty}.s16")"
-    done < <(python3 -c '
+    done < <("$python" -c '
 import json
 for p in json.load(open("scripts/verify_points.json"))["absent"]:
     print(p["name"], p["lon"], p["lat"], sep="\t")
@@ -354,9 +373,12 @@ for p in json.load(open("scripts/verify_points.json"))["absent"]:
     fi
     if [ ! -s "$gap_file" ]; then
         printf '  FAIL  terrain: no %s — the gap probe and seam profiles need it\n' "$gap_file"
+        echo "        build-terrain.sh writes it, so it is there only after a local terrain"
+        echo "        build. On any other machine, copy it from the build box (vm-build.sh"
+        echo "        prints it) into ${TERRAIN_WORK_DIR}/, or point TERRAIN_VERIFY_GAP at it."
         failures=$((failures + 1))
     else
-        gap=$(python3 -c '
+        gap=$("$python" -c '
 import json, sys
 gap = json.load(open(sys.argv[1])).get("gap")
 print("" if gap is None else "\t".join([gap["name"], str(gap["lon"]), str(gap["lat"])]))
@@ -365,7 +387,7 @@ print("" if gap is None else "\t".join([gap["name"], str(gap["lon"]), str(gap["l
             echo "  skip  terrain: gap probe (every supported-area cell has a national model)"
         else
             IFS=$'\t' read -r name lon lat <<<"$gap"
-            read -r tx ty _ _ < <(python3 scripts/terrain_grid.py cell "$lon" "$lat")
+            read -r tx ty _ _ < <("$python" scripts/terrain_grid.py cell "$lon" "$lat")
             check "terrain is 204 where no national model covers (${name})" 204 \
                 "$(status "${terrain_url}/${tx}/${ty}.s16")"
         fi
@@ -374,7 +396,7 @@ print("" if gap is None else "\t".join([gap["name"], str(gap["lon"]), str(gap["l
         # and the two sources agree at the seam within 3 m. If the foreign side
         # has no national model, it must read no height at all.
         while IFS= read -r name; do
-            if result=$(python3 scripts/terrain_grid.py profile "$name" \
+            if result=$("$python" scripts/terrain_grid.py profile "$name" \
                 --url "$terrain_url" --expect "$gap_file" 2>&1); then
                 printf '  ok    terrain: seam %s (%s)\n' "$name" "${result#ok }"
             else
@@ -382,7 +404,7 @@ print("" if gap is None else "\t".join([gap["name"], str(gap["lon"]), str(gap["l
                 printf '%s\n' "$result" | sed 's/^/          /'
                 failures=$((failures + 1))
             fi
-        done < <(python3 -c '
+        done < <("$python" -c '
 import json
 for p in json.load(open("scripts/verify_points.json"))["profiles"]:
     print(p["name"])
@@ -423,14 +445,14 @@ else
     # browser decodes with the published one, so a drift here is a wrong colour
     # on a slope rather than an error anywhere.
     class_contract() {
-        python3 -c '
+        "$python" -c '
 import json, sys
 doc = json.load(sys.stdin)
 print(json.dumps({k: doc.get(k) for k in ["minzoom", "maxzoom", "tile_size",
     "format", "encoding"]}, sort_keys=True))
 ' 2>/dev/null || echo "<unreadable>"
     }
-    want_class=$(python3 scripts/terrain_class.py descriptor | class_contract)
+    want_class=$("$python" scripts/terrain_class.py descriptor | class_contract)
     got_class=$(curl -s "${class_url}/tiles.json" | class_contract)
     check "terrain-class contract matches scripts/terrain_class.py" \
         "$want_class" "$got_class"
@@ -447,7 +469,7 @@ print(json.dumps({k: doc.get(k) for k in ["minzoom", "maxzoom", "tile_size",
         local label=$1 lon=$2 lat=$3
         local z x y px py want got tile
 
-        read -r z x y px py < <(python3 scripts/terrain_class.py locate "$lon" "$lat" 14)
+        read -r z x y px py < <("$python" scripts/terrain_class.py locate "$lon" "$lat" 14)
         tile="${class_url}/${z}/${x}/${y}.png"
         check "terrain-class: ${label} tile responds" 200 "$(status "$tile")"
         check "terrain-class: ${label} tile is png" "image/png" "$(content_type "$tile")"
@@ -455,7 +477,7 @@ print(json.dumps({k: doc.get(k) for k in ["minzoom", "maxzoom", "tile_size",
         # Every pixel of the tile, not only the probe: opaque, a valid class,
         # no height on a no-data pixel. A tile resampled or re-encoded on its
         # way out fails here rather than at one unlucky pixel.
-        got=$(curl -s "$tile" | python3 scripts/terrain_class.py check-tile || true)
+        got=$(curl -s "$tile" | "$python" scripts/terrain_class.py check-tile || true)
         case $got in
             "ok 0")
                 # Published, but every pixel no data: the cutter never writes
@@ -473,9 +495,9 @@ print(json.dumps({k: doc.get(k) for k in ["minzoom", "maxzoom", "tile_size",
                 ;;
         esac
 
-        want=$(python3 scripts/terrain_class.py expect "$lon" "$lat" 14 \
+        want=$("$python" scripts/terrain_class.py expect "$lon" "$lat" 14 \
             --url "$terrain_url" || true)
-        got=$(curl -s "$tile" | python3 scripts/terrain_class.py read-pixel "$px" "$py" || true)
+        got=$(curl -s "$tile" | "$python" scripts/terrain_class.py read-pixel "$px" "$py" || true)
         check "terrain-class: ${label} (${got})" "$want" "$got"
     }
 
@@ -487,10 +509,10 @@ print(json.dumps({k: doc.get(k) for k in ["minzoom", "maxzoom", "tile_size",
 
     # Outside coverage, and outside the zoom range: both 204, the cacheable
     # "nothing here", never a 404 and never a pixel.
-    read -r z x y _ _ < <(python3 scripts/terrain_class.py locate 4.835 45.764 14)
+    read -r z x y _ _ < <("$python" scripts/terrain_class.py locate 4.835 45.764 14)
     check "terrain-class is 204 outside coverage (Lyon)" 204 \
         "$(status "${class_url}/${z}/${x}/${y}.png")"
-    read -r z x y _ _ < <(python3 scripts/terrain_class.py locate 7.7491 46.0207 11)
+    read -r z x y _ _ < <("$python" scripts/terrain_class.py locate 7.7491 46.0207 11)
     check "terrain-class is 204 below z12 (Zermatt z11)" 204 \
         "$(status "${class_url}/${z}/${x}/${y}.png")"
 fi
@@ -523,7 +545,7 @@ else
     : "${MIN_DEM_TILE_BYTES:=10000}"
     elevation_tile() {
         local label=$1 lon=$2 lat=$3 zoom=$4 z x y tile bytes
-        read -r z x y < <(python3 scripts/dem_archives.py locate "$lon" "$lat" "$zoom")
+        read -r z x y < <("$python" scripts/dem_archives.py locate "$lon" "$lat" "$zoom")
         tile="${dem_url}/${z}/${x}/${y}.webp"
         check "dem: ${label} z${z} responds" 200 "$(status "$tile")"
         check "dem: ${label} z${z} is webp" "image/webp" "$(content_type "$tile")"
@@ -544,14 +566,14 @@ else
 
     nothing_here() {
         local label=$1 lon=$2 lat=$3 zoom=$4 z x y
-        read -r z x y < <(python3 scripts/dem_archives.py locate "$lon" "$lat" "$zoom")
+        read -r z x y < <("$python" scripts/dem_archives.py locate "$lon" "$lat" "$zoom")
         check "dem: 204 ${label}" 204 "$(status "${dem_url}/${z}/${x}/${y}.webp")"
     }
     nothing_here "outside the area at z12 (Paris)" 2.3522 48.8566 12
     nothing_here "with no regional archive (mid-Atlantic z14)" -30.0 40.0 14
     nothing_here "past the copy's zoom (Zermatt z16)" 7.7491 46.0207 16
 
-    read -r z x y < <(python3 scripts/dem_archives.py locate 7.7491 46.0207 12)
+    read -r z x y < <("$python" scripts/dem_archives.py locate 7.7491 46.0207 12)
     acao=$(curl -sI -H "Origin: ${SITE_ORIGIN}" "${dem_url}/${z}/${x}/${y}.webp" \
         | tr -d '\r' | grep -i '^access-control-allow-origin:' | cut -d' ' -f2- || true)
     check "dem: CORS allows ${SITE_ORIGIN}" "$SITE_ORIGIN" "${acao:-<none>}"
