@@ -92,7 +92,7 @@ tools="gdalbuildvrt gdalwarp gdal_translate curl"
 [ "$mapterhorn" = 1 ] && tools="$tools gdallocationinfo gdal_rasterize ogr2ogr gdal_polygonize.py"
 for tool in $tools; do
     command -v "$tool" >/dev/null 2>&1 || {
-        echo "error: ${tool} not found — install GDAL (apt install gdal-bin, brew install gdal)" >&2
+        log "error: ${tool} not found — install GDAL (apt install gdal-bin, brew install gdal)" >&2
         exit 1
     }
 done
@@ -117,19 +117,19 @@ fi
 stage "the preflight checks" \
     "Something the build needs is missing or unreachable; the line marked FAIL above names it. Nothing has been downloaded in bulk or uploaded." \
     "Fix what the FAIL line names, or send Claude the box and the lines above it."
-echo "==> preflight"
+log "==> preflight"
 preflight_failed=0
 check_url() {
     local label=$1 url=$2
     if curl -fsS -o /dev/null --max-time 30 --retry 2 --range 0-0 "$url" 2>/dev/null; then
-        echo "    ok    ${label}"
+        log "    ok    ${label}"
     else
-        echo "    FAIL  ${label}: cannot read ${url} from this machine" >&2
+        log "    FAIL  ${label}: cannot read ${url} from this machine" >&2
         preflight_failed=1
     fi
 }
 if [ "$mapterhorn" = 1 ] && ! gdal_polygonize.py --help >/dev/null 2>&1; then
-    echo "    FAIL  gdal_polygonize.py does not run: install python3-gdal (apt install python3-gdal)" >&2
+    log "    FAIL  gdal_polygonize.py does not run: install python3-gdal (apt install python3-gdal)" >&2
     preflight_failed=1
 fi
 stac_url=$("$python" -c 'import sys; sys.path.insert(0, "scripts"); import fetch_swissalti3d as f; print(f.COLLECTION_URL)')
@@ -145,9 +145,9 @@ if [ "$mapterhorn" = 1 ]; then
     if [ "${mem_gb:-0}" -gt 0 ] && [ "$mem_gb" -lt 12 ]; then
         # A warning, not a stop: the compact step ran in 15 GB on 19 Nov 2026,
         # and the true floor was not measured.
-        echo "    warn  ${mem_gb} GB of memory; compacting the clip outline ran in 15 GB, so it may run out (CPX62 has 32)" >&2
+        log "    warn  ${mem_gb} GB of memory; compacting the clip outline ran in 15 GB, so it may run out (CPX62 has 32)" >&2
     elif [ "${mem_gb:-0}" -gt 0 ]; then
-        echo "    ok    ${mem_gb} GB of memory"
+        log "    ok    ${mem_gb} GB of memory"
     fi
 fi
 if [ "$preflight_failed" = 1 ]; then
@@ -186,11 +186,11 @@ mkdir -p "$tif_dir" "$out"
 # know which you are building. Wrong is better said early than at 90%.
 free_gb=$(df -Pk "$work" | awk 'NR==2 {print int($4 / 1048576)}')
 if [ "$mapterhorn" = 1 ] && [ "${free_gb:-0}" -lt 350 ]; then
-    echo "warning: ${free_gb} GB free; the Alps-wide grid needs ~300-350 GB of" >&2
-    echo "         intermediates and tiles, so budget 400 GB" >&2
+    log "warning: ${free_gb} GB free; the Alps-wide grid needs ~300-350 GB of" >&2
+    log "         intermediates and tiles, so budget 400 GB" >&2
 elif [ "${free_gb:-0}" -lt 80 ]; then
-    echo "warning: ${free_gb} GB free; all of Switzerland needs ~60 GB of" >&2
-    echo "         intermediates and tiles, so budget 100 GB" >&2
+    log "warning: ${free_gb} GB free; all of Switzerland needs ~60 GB of" >&2
+    log "         intermediates and tiles, so budget 100 GB" >&2
 fi
 
 # --- 0. Mapterhorn: copy, coverage, credits and the datum stop ----------------
@@ -203,14 +203,14 @@ if [ "$mapterhorn" = 1 ]; then
     stage "reading the elevation copy's manifest" \
         "The server could not read dem/${TERRAIN_DEM_VERSION}/manifest.json from ${TILES_ORIGIN}, or the copy stops below zoom 14. Either step 6 (the dem build) did not upload it, or the network is down. Nothing has been uploaded." \
         "Check it from the server: curl -sI ${dem_url}/manifest.json should say 200. If it says 404, rerun step 6. Otherwise send Claude the box."
-    echo "==> elevation copy ${dem_url}"
+    log "==> elevation copy ${dem_url}"
     curl -fsS "${dem_url}/manifest.json" -o "${m_dir}/dem-manifest.json"
     "$python" scripts/mapterhorn_sources.py dem-zoom "${m_dir}/dem-manifest.json"
 
     stage "reading Mapterhorn's attribution and coverage" \
         "A download from Mapterhorn or its source.coop mirror failed or was refused, or a coverage file would not convert. Nothing has been uploaded." \
         "Run the same command again: every stage resumes. If it stops here twice, send Claude the box and the 20 lines above it."
-    echo "==> Mapterhorn attribution and coverage"
+    log "==> Mapterhorn attribution and coverage"
     curl -fsS "$TERRAIN_MAPTERHORN_ATTRIBUTION" -o "${m_dir}/attribution.json"
     coverage=$TERRAIN_MAPTERHORN_COVERAGE
     if [ "$coverage" = tarballs ]; then
@@ -235,13 +235,13 @@ if [ "$mapterhorn" = 1 ]; then
             ;;
     esac
     if [ ! -s "$coverage" ]; then
-        echo "error: no Mapterhorn coverage file at ${coverage}" >&2
+        log "error: no Mapterhorn coverage file at ${coverage}" >&2
         exit 1
     fi
     case $coverage in
         *.gpkg)
             command -v ogr2ogr >/dev/null 2>&1 || {
-                echo "error: ogr2ogr not found — install GDAL to read ${coverage}" >&2
+                log "error: ogr2ogr not found — install GDAL to read ${coverage}" >&2
                 exit 1
             }
             coverage_json="${m_dir}/coverage-converted.geojson"
@@ -274,7 +274,7 @@ if [ "$mapterhorn" = 1 ]; then
     stage "compacting the clip outline" \
         "GDAL could not rasterise or trace the coverage polygons. The usual causes are memory (the polygons are about 0.8 GB; free -g shows what is free) or a missing gdal_polygonize.py. Nothing has been uploaded." \
         "Run the same command again: every stage resumes. If it stops here twice, send Claude the box and the 20 lines above it."
-    echo "==> compacting the clip outline"
+    log "==> compacting the clip outline"
     # Over the fill's bbox and every datum crossing's window, since the check
     # runs at all of them whatever the bbox.
     # shellcheck disable=SC2086 - four numbers
@@ -292,12 +292,12 @@ if [ "$mapterhorn" = 1 ]; then
         -dialect sqlite -sql "SELECT ST_Union(geom) AS geometry FROM clip" \
         "${m_dir}/clip.geojson.part" "${m_dir}/clip-traced.gpkg"
     mv "${m_dir}/clip.geojson.part" "${m_dir}/clip.geojson"
-    echo "    $(du -h "${m_dir}/clip.geojson" | cut -f1) from $(du -h "${m_dir}/clip-full.geojson" | cut -f1)"
+    log "    $(du -h "${m_dir}/clip.geojson" | cut -f1) from $(du -h "${m_dir}/clip-full.geojson" | cut -f1)"
 
     stage "the datum check at the border crossings" \
         "The lines just above say what each crossing found and what it means. Nothing has been uploaded." \
         "Follow the advice printed above the box."
-    echo "==> datum check at the border crossings"
+    log "==> datum check at the border crossings"
     "$python" scripts/datum_check.py \
         --work "${work}/datum/${TERRAIN_DEM_VERSION}" \
         --dem-url "$dem_url" \
@@ -311,9 +311,9 @@ stage "listing swissALTI3D squares" \
     "swisstopo's STAC service did not answer or answered with an error. Nothing has been uploaded." \
     "Run the same command again: every stage resumes. If it stops here twice, send Claude the box and the 20 lines above it."
 if [ -s "$urls" ] && [ -s "$swiss_manifest" ]; then
-    echo "==> ${urls} already listed ($(wc -l <"$urls" | tr -d ' ') squares)"
+    log "==> ${urls} already listed ($(wc -l <"$urls" | tr -d ' ') squares)"
 else
-    echo "==> listing swissALTI3D squares over ${TERRAIN_BBOX}"
+    log "==> listing swissALTI3D squares over ${TERRAIN_BBOX}"
     # shellcheck disable=SC2086 - TERRAIN_BBOX is four numbers, deliberately split
     "$python" scripts/fetch_swissalti3d.py \
         --bbox $TERRAIN_BBOX \
@@ -332,14 +332,14 @@ fi
 stage "downloading swissALTI3D" \
     "Some GeoTIFFs did not download: usually a network blip at swisstopo's end. Nothing has been uploaded." \
     "Run the same command again. It downloads only what is missing."
-echo "==> downloading $(wc -l <"$urls" | tr -d ' ') GeoTIFFs into ${tif_dir}"
+log "==> downloading $(wc -l <"$urls" | tr -d ' ') GeoTIFFs into ${tif_dir}"
 export TERRAIN_TIF_DIR="$tif_dir"
 fetch_one() {
     local url=$1 dest
     dest="${TERRAIN_TIF_DIR}/$(basename "$url")"
     [ -s "$dest" ] && return 0
     curl -fsS --retry 3 --retry-delay 2 -o "${dest}.part" "$url" || {
-        echo "error: failed ${url}" >&2
+        log "error: failed ${url}" >&2
         return 1
     }
     mv "${dest}.part" "$dest"
@@ -353,7 +353,7 @@ xargs -P "$TERRAIN_JOBS" -I{} bash -c 'fetch_one "$@"' _ {} <"$urls" || true
 have=$(find "$tif_dir" -name '*.tif' | wc -l | tr -d ' ')
 want=$(wc -l <"$urls" | tr -d ' ')
 if [ "$have" -ne "$want" ]; then
-    echo "error: ${have} of ${want} GeoTIFFs downloaded — rerun to resume" >&2
+    log "error: ${have} of ${want} GeoTIFFs downloaded — rerun to resume" >&2
     exit 1
 fi
 
@@ -375,7 +375,7 @@ if [ "$mapterhorn" = 1 ]; then
         mv "${tile_list}.part" "$tile_list"
     fi
     want_tiles=$(wc -l <"$tile_list" | tr -d ' ')
-    echo "==> fetching ${want_tiles} z14 tiles from ${dem_url}"
+    log "==> fetching ${want_tiles} z14 tiles from ${dem_url}"
     export TERRAIN_DEM_URL="$dem_url" TERRAIN_WEBP_DIR="${m_dir}/webp"
     fetch_tile() {
         local zxy=$1 dest
@@ -383,7 +383,7 @@ if [ "$mapterhorn" = 1 ]; then
         [ -e "$dest" ] && return 0
         mkdir -p "$(dirname "$dest")"
         curl -fsS --retry 3 --retry-delay 2 -o "${dest}.part" "${TERRAIN_DEM_URL}/${zxy}.webp" || {
-            echo "error: failed ${TERRAIN_DEM_URL}/${zxy}.webp" >&2
+            log "error: failed ${TERRAIN_DEM_URL}/${zxy}.webp" >&2
             return 1
         }
         # A 204 writes nothing; make the empty file so the rerun skips it.
@@ -395,7 +395,7 @@ if [ "$mapterhorn" = 1 ]; then
 
     have_tiles=$(find "${m_dir}/webp" -name '*.webp' | wc -l | tr -d ' ')
     if [ "$have_tiles" -ne "$want_tiles" ]; then
-        echo "error: ${have_tiles} of ${want_tiles} z14 tiles fetched — rerun to resume" >&2
+        log "error: ${have_tiles} of ${want_tiles} z14 tiles fetched — rerun to resume" >&2
         exit 1
     fi
 
@@ -404,9 +404,9 @@ if [ "$mapterhorn" = 1 ]; then
         "Run the same command again: every stage resumes. If it stops here twice, send Claude the box and the 20 lines above it."
     mosaic="${m_dir}/blocks/mosaic.vrt"
     if [ -s "$mosaic" ] && [ "${FORCE_TERRAIN:-0}" != "1" ]; then
-        echo "==> ${mosaic} exists — skipping decode; FORCE_TERRAIN=1 to redo"
+        log "==> ${mosaic} exists — skipping decode; FORCE_TERRAIN=1 to redo"
     else
-        echo "==> decoding Terrarium into Float32 blocks"
+        log "==> decoding Terrarium into Float32 blocks"
         "$python" scripts/terrarium.py decode \
             --tiles "$tile_list" \
             --tile-dir "${m_dir}/webp" \
@@ -416,7 +416,7 @@ if [ "$mapterhorn" = 1 ]; then
     # The grid's extent is read from manifest.json, so widening it here is what
     # puts the rest of the Alps on the grid. Rewritten every run: it is cheap,
     # and a stale one would warp the wrong extent.
-    echo "==> widening ${manifest} to the Mapterhorn area"
+    log "==> widening ${manifest} to the Mapterhorn area"
     # shellcheck disable=SC2086 - four numbers
     "$python" scripts/mapterhorn_sources.py manifest \
         --swiss "$swiss_manifest" \
@@ -434,7 +434,7 @@ stage "reprojecting swissALTI3D (the slow part)" \
 # --- 3. Reproject and resample -----------------------------------------------
 
 if [ ! -s "$vrt" ] || [ "$urls" -nt "$vrt" ]; then
-    echo "==> building VRT over ${have} squares"
+    log "==> building VRT over ${have} squares"
     find "$tif_dir" -name '*.tif' | sort >"${work}/tif-list.txt"
     gdalbuildvrt -input_file_list "${work}/tif-list.txt" -overwrite "$vrt"
 fi
@@ -451,7 +451,7 @@ read -r s_min s_max d_min d_max \
 
 cols=$(( (te_e - te_w) / cell ))
 rows=$(( (te_n - te_s) / cell ))
-echo "==> grid ${cols}x${rows} cells, ${tiles_x}x${tiles_y} tiles from (${tile_x}, ${tile_y})"
+log "==> grid ${cols}x${rows} cells, ${tiles_x}x${tiles_y} tiles from (${tile_x}, ${tile_y})"
 
 # A raster is reused only if it was made over this extent: a warped.tif left by
 # a Swiss-only run is a different shape from the one an Alps-wide run needs.
@@ -461,9 +461,9 @@ current() { [ -s "$1" ] && [ "$(cat "${1}.extent" 2>/dev/null)" = "${2:-$stamp}"
 m_stamp="${stamp} dem=${TERRAIN_DEM_VERSION}"
 
 if current "$warped"; then
-    echo "==> ${warped} exists — skipping warp; FORCE_TERRAIN=1 to redo"
+    log "==> ${warped} exists — skipping warp; FORCE_TERRAIN=1 to redo"
 else
-    echo "==> warping to EPSG:3035 at ${cell} m (this is the slow part)"
+    log "==> warping to EPSG:3035 at ${cell} m (this is the slow part)"
     # -r average is the resample, and it is the whole reason the source is 2 m:
     # a box filter down to 5 m has something to average. Bilinear or nearest
     # would carry 2 m noise straight into a 5 m cell.
@@ -498,9 +498,9 @@ stage "warping and compositing the Mapterhorn fill" \
 grid_source=$warped
 if [ "$mapterhorn" = 1 ]; then
     if current "$mapterhorn_tif" "$m_stamp"; then
-        echo "==> ${mapterhorn_tif} exists — skipping warp; FORCE_TERRAIN=1 to redo"
+        log "==> ${mapterhorn_tif} exists — skipping warp; FORCE_TERRAIN=1 to redo"
     else
-        echo "==> warping the Mapterhorn fill to EPSG:3035 at ${cell} m"
+        log "==> warping the Mapterhorn fill to EPSG:3035 at ${cell} m"
         # The same -te, -tr, resample and no-data as the swissALTI3D warp, so the
         # two land on identical cells. -cutline is the union of the national
         # models' coverage polygons, used as published: GLO-30-only ground is
@@ -521,9 +521,9 @@ if [ "$mapterhorn" = 1 ]; then
     fi
 
     if current "$merged" "$m_stamp" && [ "$merged" -nt "$warped" ] && [ "$merged" -nt "$mapterhorn_tif" ]; then
-        echo "==> ${merged} exists — skipping composite; FORCE_TERRAIN=1 to redo"
+        log "==> ${merged} exists — skipping composite; FORCE_TERRAIN=1 to redo"
     else
-        echo "==> compositing: Mapterhorn first, swissALTI3D last"
+        log "==> compositing: Mapterhorn first, swissALTI3D last"
         ./scripts/composite-terrain.sh "$mapterhorn_tif" "$warped" "$merged" \
             "$te_w" "$te_s" "$te_e" "$te_n"
         echo "$m_stamp" >"${merged}.extent"
@@ -538,9 +538,9 @@ stage "quantising the grid" \
 
 if current "$raw" && [ "$(cat "${raw}.source" 2>/dev/null)" = "$grid_source" ] \
     && [ "$raw" -nt "$grid_source" ]; then
-    echo "==> ${raw} exists — skipping quantise; FORCE_TERRAIN=1 to redo"
+    log "==> ${raw} exists — skipping quantise; FORCE_TERRAIN=1 to redo"
 else
-    echo "==> quantising [${s_min}, ${s_max}] m onto Int16 [${d_min}, ${d_max}]"
+    log "==> quantising [${s_min}, ${s_max}] m onto Int16 [${d_min}, ${d_max}]"
     # An exact linear map of metres onto the stored scale: -scale's endpoints
     # are emitted by terrain_grid.py so the encoding here cannot drift from the
     # encoding SNOW-917 decodes with. The float nodata sentinel is the bottom of
@@ -580,12 +580,12 @@ if [ "$mapterhorn" = 1 ]; then
     blend_stamp="${raw}.blend"
     if [ -s "$blend_stamp" ] && [ "$blend_stamp" -nt "${raw}.extent" ] \
         && [ "${FORCE_TERRAIN:-0}" != "1" ]; then
-        echo "==> swissALTI3D's edge already blended ($(cat "$blend_stamp")) — skipping"
+        log "==> swissALTI3D's edge already blended ($(cat "$blend_stamp")) — skipping"
     else
         read -r b_x b_y b_w b_h < <("$python" scripts/blend_seam.py window \
             --manifest "$swiss_manifest" \
             --west "$te_w" --north "$te_n" --cols "$cols" --rows "$rows")
-        echo "==> blending swissALTI3D's edge: window ${b_w}x${b_h} at (${b_x}, ${b_y})"
+        log "==> blending swissALTI3D's edge: window ${b_w}x${b_h} at (${b_x}, ${b_y})"
         for pair in "swiss:${warped}" "fill:${mapterhorn_tif}"; do
             name=${pair%%:*} source=${pair#*:}
             gdal_translate -q \
@@ -595,7 +595,7 @@ if [ "$mapterhorn" = 1 ]; then
                 -a_nodata "$d_min" \
                 -srcwin "$b_x" "$b_y" "$b_w" "$b_h" \
                 "$source" "${work}/blend-${name}.raw"
-            echo "    ${name} window cut"
+            log "    ${name} window cut"
         done
         "$python" scripts/blend_seam.py blend \
             --raw "$raw" --cols "$cols" --rows "$rows" \
@@ -613,7 +613,7 @@ fi
 hdr="${raw%.raw}.hdr"
 [ -f "$hdr" ] || hdr="${raw}.hdr"
 if [ -f "$hdr" ] && ! grep -qi '^byte order *= *0' "$hdr"; then
-    echo "error: ${hdr} is not little-endian; the tile format assumes it is" >&2
+    log "error: ${hdr} is not little-endian; the tile format assumes it is" >&2
     exit 1
 fi
 
@@ -658,13 +658,13 @@ if [ "$mapterhorn" = 1 ]; then
     # terrain-class target removes dist/terrain before it builds, and verify.sh
     # still needs this file afterwards. verify.sh falls back to this copy.
     cp "${out}/verify-gap.json" "${work}/verify-gap.json"
-    echo "==> ${out}/verify-gap.json written for verify.sh (copy in ${work})"
+    log "==> ${out}/verify-gap.json written for verify.sh (copy in ${work})"
 fi
 
 echo
-echo "==> ${out} ready: $(du -sh "$out" | cut -f1)"
-echo "    publish with: ./scripts/upload.sh"
-echo "    then:         ./scripts/verify.sh"
+log "==> ${out} ready: $(du -sh "$out" | cut -f1)"
+log "    publish with: ./scripts/upload.sh"
+log "    then:         ./scripts/verify.sh"
 echo
-echo "    ${work} holds ~$(du -sh "$work" 2>/dev/null | cut -f1) of intermediates"
-echo "    and can be deleted once the tiles are published."
+log "    ${work} holds ~$(du -sh "$work" 2>/dev/null | cut -f1) of intermediates"
+log "    and can be deleted once the tiles are published."

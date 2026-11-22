@@ -9,6 +9,11 @@
 #
 # Sourced by the other scripts; not meant to be run directly.
 
+# log, logf and stamp_lines: every script that sources this logs with a
+# timestamp. Found beside this file, whatever the working directory.
+# shellcheck source=scripts/log.sh
+source "$(dirname "${BASH_SOURCE[0]}")/log.sh"
+
 # The public origin the assets will be served from. Also the origin written
 # into the rewritten style JSON.
 #

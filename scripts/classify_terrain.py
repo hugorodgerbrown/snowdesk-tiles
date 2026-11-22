@@ -53,6 +53,7 @@ from typing import BinaryIO
 
 import numpy as np
 from numpy.typing import NDArray
+from stamp import log
 from terrain_class import (
     BAND_DEG,
     KERNEL_OFFSETS,
@@ -224,7 +225,7 @@ def classify_grid(
         for plane, sink in zip(planes, sinks, strict=True):
             sink.write(plane.tobytes())
         classified += int(np.count_nonzero(planes[2] != NO_DATA))
-        print(f"    row {stop}/{rows}", end="\r", file=sys.stderr)
+        log(f"    row {stop}/{rows}", end="\r")
     print(file=sys.stderr)
     return classified
 
@@ -285,7 +286,7 @@ def main(argv: list[str] | None = None) -> int:
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
 
-    print(f"==> classifying {args.cols}x{args.rows} cells into {out}", file=sys.stderr)
+    log(f"==> classifying {args.cols}x{args.rows} cells into {out}")
     paths = [out / f"class_{plane}.raw" for plane in PLANES]
     # Written under a temporary name and renamed at the end, so an interrupted
     # run never leaves planes that look finished to the resumable build.
@@ -303,9 +304,9 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     if not classified:
-        print("error: no cell received a class — is the grid empty?", file=sys.stderr)
+        log("error: no cell received a class — is the grid empty?")
         return 1
-    print(f"==> {classified} cells classified", file=sys.stderr)
+    log(f"==> {classified} cells classified")
     return 0
 
 

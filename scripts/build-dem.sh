@@ -31,30 +31,30 @@ if ! [[ "$version" =~ ^[A-Za-z0-9][A-Za-z0-9_-]*$ ]]; then
     exit 2
 fi
 command -v pmtiles >/dev/null 2>&1 || {
-    echo "error: pmtiles CLI not found — https://github.com/protomaps/go-pmtiles/releases" >&2
+    log "error: pmtiles CLI not found — https://github.com/protomaps/go-pmtiles/releases" >&2
     exit 1
 }
 [ -s "$DEM_AREA" ] || {
-    echo "error: no area at ${DEM_AREA} — run export_supported_area in snowdesk-data-pipeline" >&2
+    log "error: no area at ${DEM_AREA} — run export_supported_area in snowdesk-data-pipeline" >&2
     exit 1
 }
 
 out="${DIST_DIR}/${DEM_DIR}/${version}"
 mkdir -p "$out"
 
-echo "==> Mapterhorn catalogue"
+log "==> Mapterhorn catalogue"
 catalogue="${out}/download_urls.json"
 curl -fsS "${DEM_SOURCE_ORIGIN}/download_urls.json" -o "$catalogue"
-echo "    release $(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("version"))' "$catalogue")"
+log "    release $(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("version"))' "$catalogue")"
 
 extract() {
     local name=$1 max_zoom=$2
     local target="${out}/${name}"
     if [ -s "$target" ] && [ "${FORCE_DEM:-0}" != "1" ]; then
-        echo "    ${name}: already built — keeping it (FORCE_DEM=1 to redo)"
+        log "    ${name}: already built — keeping it (FORCE_DEM=1 to redo)"
         return
     fi
-    echo "    ${name}: extracting to z${max_zoom}"
+    log "    ${name}: extracting to z${max_zoom}"
     # Into a .part file and renamed after, so an interrupted extract is never
     # mistaken for a finished one on the resume above.
     pmtiles extract "${DEM_SOURCE_ORIGIN}/${name}" "${target}.part" \
@@ -64,11 +64,11 @@ extract() {
     mv "${target}.part" "$target"
 }
 
-echo "==> planet.pmtiles, z0-12"
+log "==> planet.pmtiles, z0-12"
 extract planet.pmtiles 12
 
 mapfile -t regional < <(python3 scripts/dem_archives.py select "$DEM_AREA" "$catalogue")
-echo "==> ${#regional[@]} regional archive(s), z13-${DEM_MAX_ZOOM}"
+log "==> ${#regional[@]} regional archive(s), z13-${DEM_MAX_ZOOM}"
 for name in "${regional[@]}"; do
     extract "$name" "$DEM_MAX_ZOOM"
 done
@@ -77,6 +77,6 @@ python3 scripts/dem_archives.py manifest "$version" "$DEM_AREA" "$catalogue" \
     "${regional[@]}" --max-zoom "$DEM_MAX_ZOOM" >"${out}/manifest.json"
 rm -f "$catalogue"
 
-echo "==> built ${out} ($(du -sh "$out" | cut -f1))"
-echo "    publish with: ./scripts/upload.sh"
-echo "    then: DEM_VERSION=${version} ./scripts/verify.sh"
+log "==> built ${out} ($(du -sh "$out" | cut -f1))"
+log "    publish with: ./scripts/upload.sh"
+log "    then: DEM_VERSION=${version} ./scripts/verify.sh"

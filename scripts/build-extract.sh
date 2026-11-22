@@ -50,17 +50,17 @@ EOF
 fi
 
 version=$("$java" -version 2>&1 | head -1)
-echo "==> using ${java} (${version})"
+log "==> using ${java} (${version})"
 
 if [ ! -f "$jar" ]; then
-    echo "==> downloading planetiler ${PLANETILER_VERSION}"
+    log "==> downloading planetiler ${PLANETILER_VERSION}"
     curl -fL --progress-bar -o "$jar" "$jar_url"
 fi
 
 mkdir -p "$DIST_DIR"
 
-echo "==> building ${PLANETILER_AREA} within ${PLANETILER_BOUNDS}"
-echo "    -> ${DIST_DIR}/${PMTILES_NAME}"
+log "==> building ${PLANETILER_AREA} within ${PLANETILER_BOUNDS}"
+log "    -> ${DIST_DIR}/${PMTILES_NAME}"
 "$java" "-Xmx${PLANETILER_MEMORY}" -jar "$jar" \
     --download \
     --area="$PLANETILER_AREA" \
@@ -68,5 +68,5 @@ echo "    -> ${DIST_DIR}/${PMTILES_NAME}"
     --output="${DIST_DIR}/${PMTILES_NAME}" \
     --force
 
-echo "==> built $(du -h "${DIST_DIR}/${PMTILES_NAME}" | cut -f1) archive"
-echo "    inspect it with: pmtiles show ${DIST_DIR}/${PMTILES_NAME}"
+log "==> built $(du -h "${DIST_DIR}/${PMTILES_NAME}" | cut -f1) archive"
+log "    inspect it with: pmtiles show ${DIST_DIR}/${PMTILES_NAME}"

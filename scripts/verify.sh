@@ -40,9 +40,9 @@ failures=0
 check() {
     local label=$1 expected=$2 actual=$3
     if [ "$actual" = "$expected" ]; then
-        printf '  ok    %s\n' "$label"
+        logf '  ok    %s' "$label"
     else
-        printf '  FAIL  %s (expected %s, got %s)\n' "$label" "$expected" "$actual"
+        logf '  FAIL  %s (expected %s, got %s)' "$label" "$expected" "$actual"
         failures=$((failures + 1))
     fi
 }
@@ -56,7 +56,7 @@ content_type() { curl -sI -o /dev/null -w '%{content_type}' "$@"; }
 # so a clean run reports failure.
 header() { curl -sI "$1" | tr -d '\r' | grep -i "^$2:" | cut -d' ' -f2- | tail -1 || true; }
 
-echo "==> ${TILES_ORIGIN}"
+log "==> ${TILES_ORIGIN}"
 
 check "style responds" 200 "$(status "${TILES_ORIGIN}/styles/liberty")"
 
@@ -73,7 +73,7 @@ if [ -n "$sprite" ]; then
     check "sprite atlas responds" 200 "$(status "${sprite}.png")"
     check "sprite index responds" 200 "$(status "${sprite}.json")"
 else
-    echo "  skip  sprite (no string sprite field in style)"
+    log "  skip  sprite (no string sprite field in style)"
 fi
 
 check "glyphs respond" 200 \
@@ -167,9 +167,9 @@ coverage() {
     local bytes
     bytes=$(curl -s -o /dev/null -w '%{size_download}' "${TILES_ORIGIN}/tiles/${TILE_VERSION}/${tile}.mvt")
     if [ "$bytes" -ge "$MIN_TILE_BYTES" ]; then
-        printf '  ok    coverage: %s (%s bytes)\n' "$label" "$bytes"
+        logf '  ok    coverage: %s (%s bytes)' "$label" "$bytes"
     else
-        printf '  FAIL  coverage: %s is empty or sparse (%s bytes)\n' "$label" "$bytes"
+        logf '  FAIL  coverage: %s is empty or sparse (%s bytes)' "$label" "$bytes"
         failures=$((failures + 1))
     fi
 }
@@ -205,7 +205,7 @@ coverage "Grenoble (FR Alps)" 10/528/367
 # before the terrain build has ever been run; it is not a way past a failure.
 if [ "${TERRAIN:-1}" != "1" ]; then
     echo
-    echo "  skip  terrain checks (TERRAIN=0)"
+    log "  skip  terrain checks (TERRAIN=0)"
 else
     echo
     terrain_url="${TILES_ORIGIN}/terrain/${TERRAIN_VERSION}"
@@ -282,7 +282,7 @@ print(first, credits)
         body_size=$(curl -s -o /dev/null -w '%{size_download}' \
             "${terrain_url}/${tx}/${ty}.s16")
         if [ "$body_size" != "$tile_bytes" ]; then
-            printf '  FAIL  terrain: %s tile %s/%s is %s bytes, expected %s\n' \
+            logf '  FAIL  terrain: %s tile %s/%s is %s bytes, expected %s' \
                 "$label" "$tx" "$ty" "$body_size" "$tile_bytes"
             failures=$((failures + 1))
             return
@@ -291,14 +291,14 @@ print(first, credits)
         height=$(curl -s "${terrain_url}/${tx}/${ty}.s16" \
             | "$python" scripts/terrain_grid.py read-cell "$row" "$col")
         if [ "$height" = "nodata" ] || [ "$height" = "short" ]; then
-            printf '  FAIL  terrain: %s reads %s, expected %s-%s m\n' \
+            logf '  FAIL  terrain: %s reads %s, expected %s-%s m' \
                 "$label" "$height" "$low" "$high"
             failures=$((failures + 1))
         elif awk -v h="$height" -v lo="$low" -v hi="$high" \
             'BEGIN { exit !(h >= lo && h <= hi) }'; then
-            printf '  ok    terrain: %s (%s m)\n' "$label" "$height"
+            logf '  ok    terrain: %s (%s m)' "$label" "$height"
         else
-            printf '  FAIL  terrain: %s reads %s m, expected %s-%s m\n' \
+            logf '  FAIL  terrain: %s reads %s m, expected %s-%s m' \
                 "$label" "$height" "$low" "$high"
             failures=$((failures + 1))
         fi
@@ -328,7 +328,7 @@ print(first, credits)
     # highest cell nearby was within 10 m of every published height.
     if summit_lines=$("$python" scripts/terrain_grid.py summits --url "$terrain_url" 2>&1); then
         while IFS= read -r line; do
-            printf '  ok    terrain: %s\n' "$line"
+            logf '  ok    terrain: %s' "$line"
         done <<<"$summit_lines"
     else
         while IFS= read -r line; do
@@ -372,10 +372,10 @@ for p in json.load(open("scripts/verify_points.json"))["absent"]:
         gap_file="${TERRAIN_WORK_DIR}/verify-gap.json"
     fi
     if [ ! -s "$gap_file" ]; then
-        printf '  FAIL  terrain: no %s — the gap probe and seam profiles need it\n' "$gap_file"
-        echo "        build-terrain.sh writes it, so it is there only after a local terrain"
-        echo "        build. On any other machine, copy it from the build box (vm-build.sh"
-        echo "        prints it) into ${TERRAIN_WORK_DIR}/, or point TERRAIN_VERIFY_GAP at it."
+        logf '  FAIL  terrain: no %s — the gap probe and seam profiles need it' "$gap_file"
+        log "        build-terrain.sh writes it, so it is there only after a local terrain"
+        log "        build. On any other machine, copy it from the build box (vm-build.sh"
+        log "        prints it) into ${TERRAIN_WORK_DIR}/, or point TERRAIN_VERIFY_GAP at it."
         failures=$((failures + 1))
     else
         gap=$("$python" -c '
@@ -384,7 +384,7 @@ gap = json.load(open(sys.argv[1])).get("gap")
 print("" if gap is None else "\t".join([gap["name"], str(gap["lon"]), str(gap["lat"])]))
 ' "$gap_file")
         if [ -z "$gap" ]; then
-            echo "  skip  terrain: gap probe (every supported-area cell has a national model)"
+            log "  skip  terrain: gap probe (every supported-area cell has a national model)"
         else
             IFS=$'\t' read -r name lon lat <<<"$gap"
             read -r tx ty _ _ < <("$python" scripts/terrain_grid.py cell "$lon" "$lat")
@@ -398,9 +398,9 @@ print("" if gap is None else "\t".join([gap["name"], str(gap["lon"]), str(gap["l
         while IFS= read -r name; do
             if result=$("$python" scripts/terrain_grid.py profile "$name" \
                 --url "$terrain_url" --expect "$gap_file" 2>&1); then
-                printf '  ok    terrain: seam %s (%s)\n' "$name" "${result#ok }"
+                logf '  ok    terrain: seam %s (%s)' "$name" "${result#ok }"
             else
-                printf '  FAIL  terrain: seam %s\n' "$name"
+                logf '  FAIL  terrain: seam %s' "$name"
                 printf '%s\n' "$result" | sed 's/^/          /'
                 failures=$((failures + 1))
             fi
@@ -431,7 +431,7 @@ fi
 # class tiles have ever been built. It is not a way past a failure.
 if [ "${TERRAIN_CLASS:-1}" != "1" ]; then
     echo
-    echo "  skip  terrain-class checks (TERRAIN_CLASS=0)"
+    log "  skip  terrain-class checks (TERRAIN_CLASS=0)"
 else
     echo
     class_url="${TILES_ORIGIN}/terrain-class/${TERRAIN_CLASS_VERSION}"
@@ -482,15 +482,15 @@ print(json.dumps({k: doc.get(k) for k in ["minzoom", "maxzoom", "tile_size",
             "ok 0")
                 # Published, but every pixel no data: the cutter never writes
                 # such a tile, so something else put it there.
-                printf '  FAIL  terrain-class: %s tile holds no data at all\n' "$label"
+                logf '  FAIL  terrain-class: %s tile holds no data at all' "$label"
                 failures=$((failures + 1))
                 ;;
             ok\ *)
-                printf '  ok    terrain-class: %s tile decodes, all opaque (%s data px)\n' \
+                logf '  ok    terrain-class: %s tile decodes, all opaque (%s data px)' \
                     "$label" "${got#ok }"
                 ;;
             *)
-                printf '  FAIL  terrain-class: %s tile %s\n' "$label" "$got"
+                logf '  FAIL  terrain-class: %s tile %s' "$label" "$got"
                 failures=$((failures + 1))
                 ;;
         esac
@@ -530,7 +530,7 @@ fi
 # 3-D map reads as "take AWS's tile" — and the site origin may read them.
 if [ -z "${DEM_VERSION:-}" ]; then
     echo
-    echo "  skip  3-D elevation checks (set DEM_VERSION to check a copy)"
+    log "  skip  3-D elevation checks (set DEM_VERSION to check a copy)"
 else
     echo
     dem_url="${TILES_ORIGIN}/${DEM_DIR}/${DEM_VERSION}"
@@ -552,9 +552,9 @@ else
         check "dem: ${label} z${z} is immutable" "$tile_cache" "$(header "$tile" cache-control)"
         bytes=$(curl -s -o /dev/null -w '%{size_download}' "$tile")
         if [ "$bytes" -ge "$MIN_DEM_TILE_BYTES" ]; then
-            printf '  ok    dem: %s z%s holds relief (%s bytes)\n' "$label" "$z" "$bytes"
+            logf '  ok    dem: %s z%s holds relief (%s bytes)' "$label" "$z" "$bytes"
         else
-            printf '  FAIL  dem: %s z%s is flat or empty (%s bytes)\n' "$label" "$z" "$bytes"
+            logf '  FAIL  dem: %s z%s is flat or empty (%s bytes)' "$label" "$z" "$bytes"
             failures=$((failures + 1))
         fi
     }
@@ -605,7 +605,7 @@ check "raster twin is webp" "image/webp" \
 # the only live copy, and a second one would drift the same way.
 allowed=$(sed -n 's/^ALLOWED_ORIGINS *= *"\(.*\)"/\1/p' worker/wrangler.toml)
 if [ -z "$allowed" ]; then
-    echo "  FAIL  could not read ALLOWED_ORIGINS from worker/wrangler.toml"
+    log "  FAIL  could not read ALLOWED_ORIGINS from worker/wrangler.toml"
     failures=$((failures + 1))
 fi
 
@@ -624,7 +624,7 @@ done
 
 echo
 if [ "$failures" -gt 0 ]; then
-    echo "${failures} check(s) failed"
+    log "${failures} check(s) failed"
     exit 1
 fi
-echo "all checks passed"
+log "all checks passed"

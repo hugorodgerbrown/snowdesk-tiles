@@ -8,6 +8,7 @@ tested by putting a wrong answer on steep ground where it must not count.
 
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 
@@ -322,7 +323,8 @@ def test_a_failed_run_says_what_it_means_and_what_to_do(
 
     out = capsys.readouterr()
     assert code == 1
-    assert out.out.count("FAIL") == 3
+    assert out.err.count("  FAIL  datum:") == 3
+    assert re.match(r"\d{4}-\d\d-\d\d \d\d:\d\d:\d\d   ok    datum:", out.err)
     assert "nothing was uploaded" in out.err
     assert "47 m off" in out.err  # the step
     assert "could not compare" in out.err  # no seam

@@ -25,12 +25,13 @@ entry) lives in `snowdesk-data-pipeline` under SNOW-242.
 | Path | Purpose |
 |------|---------|
 | `scripts/config.sh` | Every tunable, as an env var with a default. Sourced by the rest. |
+| `scripts/log.sh`, `scripts/stamp.py` | `log`, `logf` and `stamp_lines` (shell) and `log` (Python): every progress line starts with the local date and time, e.g. `2026-11-20 12:44:31 ==> uploading to R2`. stdout lines the scripts parse stay unstamped. |
 | `scripts/build-extract.sh` | planetiler → `dist/snowdesk.pmtiles`. Slow; needs ~100 GB disk. |
 | `scripts/mirror_assets.py` | Mirrors sprites, glyphs and the Natural Earth raster from upstream. |
 | `scripts/transcode_raster.py` | Writes a WebP twin beside each mirrored relief PNG. Needs Pillow. |
 | `scripts/rewrite_style.py` | Repoints the Liberty style JSON at our origin and archive. |
 | `scripts/build.sh` | Runs the three above to assemble `dist/`. |
-| `scripts/upload.sh` | Publishes `dist/` to R2 with per-class Content-Type and Cache-Control. |
+| `scripts/upload.sh` | Publishes `dist/` to R2 with per-class Content-Type and Cache-Control. A sync R2 throttles is retried (adaptive CLI retries, then up to three passes) before `grid.json` or `tiles.json` goes up. |
 | `scripts/setup-bucket.sh` | One-time bucket creation. |
 | `scripts/vm-build.sh` | Builds the archive on a throwaway VM and uploads it to R2. `terrain` compares Swiss heights with the live grid before it uploads. |
 | `scripts/terrain_grid.py` | The terrain grid's geometry and encoding. The contract with SNOW-917. |

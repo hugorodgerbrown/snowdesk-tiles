@@ -80,7 +80,8 @@ script_dir=$(cd "$(dirname "$0")" && pwd)
 if [ -f "${script_dir}/config.sh" ]; then
     cd "${script_dir}/.."
 else
-    echo "==> cloning snowdesk-tiles (${REPO_BRANCH})"
+    # Before config.sh, so log.sh is not loaded yet: the same stamp, inline.
+    echo "$(date '+%Y-%m-%d %H:%M:%S') ==> cloning snowdesk-tiles (${REPO_BRANCH})"
     command -v git >/dev/null 2>&1 || { sudo apt-get update -qq && sudo apt-get install -y -qq git; }
     git clone --depth 1 --branch "$REPO_BRANCH" "$REPO_URL" snowdesk-tiles
     cd snowdesk-tiles
@@ -111,10 +112,10 @@ prompt_secret() {
 install_op_cli() {
     if command -v op >/dev/null 2>&1; then return; fi
     command -v apt-get >/dev/null 2>&1 || {
-        echo "error: install the 1Password CLI (op) yourself on a non-Debian host" >&2
+        log "error: install the 1Password CLI (op) yourself on a non-Debian host" >&2
         exit 1
     }
-    echo "==> installing the 1Password CLI"
+    log "==> installing the 1Password CLI"
     local arch key=/usr/share/keyrings/1password-archive-keyring.gpg
     local policy=AC2D62742012EA22
     arch=$(dpkg --print-architecture)
@@ -163,7 +164,7 @@ prompt_secret AWS_SECRET_ACCESS_KEY "R2 secret access key"
 # directly, and skip it when a real one is already on the box.
 install_aws_cli() {
     if command -v aws >/dev/null 2>&1; then
-        echo "    aws already installed ($(aws --version 2>&1))"
+        log "    aws already installed ($(aws --version 2>&1))"
         return
     fi
     local tmp
@@ -180,7 +181,7 @@ install_aws_cli() {
 # latest release is used, read from the redirect GitHub gives /releases/latest.
 install_pmtiles_cli() {
     if command -v pmtiles >/dev/null 2>&1; then
-        echo "    pmtiles already installed ($(pmtiles version 2>&1 | head -1))"
+        log "    pmtiles already installed ($(pmtiles version 2>&1 | head -1))"
         return
     fi
     local version=${PMTILES_CLI_VERSION:-} arch tmp
@@ -200,13 +201,13 @@ install_pmtiles_cli() {
     tar -xzf "${tmp}/pmtiles.tar.gz" -C "$tmp" pmtiles
     sudo install -m 0755 "${tmp}/pmtiles" /usr/local/bin/pmtiles
     rm -rf "$tmp"
-    echo "    pmtiles ${version} installed"
+    log "    pmtiles ${version} installed"
 }
 
 stage "installing the build tools" \
     "apt or a download of the AWS or pmtiles CLI failed: usually the network, or apt busy with an automatic update. Nothing has been built or uploaded." \
     "Wait a minute and run the same command again."
-echo "==> installing build dependencies for ${target}"
+log "==> installing build dependencies for ${target}"
 if command -v apt-get >/dev/null 2>&1; then
     export DEBIAN_FRONTEND=noninteractive
     sudo apt-get update -qq
@@ -222,11 +223,11 @@ if command -v apt-get >/dev/null 2>&1; then
     install_aws_cli
     [ "$target" = "dem" ] && install_pmtiles_cli
 else
-    echo "warning: not a Debian/Ubuntu host — install the dependencies yourself" >&2
-    echo "         basemap: Java 21 + awscli v2" >&2
-    echo "         terrain: GDAL + Python 3.12 with numpy and Pillow + awscli v2" >&2
-    echo "         terrain-class: as terrain" >&2
-    echo "         dem: Python 3.12 + the pmtiles CLI + awscli v2" >&2
+    log "warning: not a Debian/Ubuntu host — install the dependencies yourself" >&2
+    log "         basemap: Java 21 + awscli v2" >&2
+    log "         terrain: GDAL + Python 3.12 with numpy and Pillow + awscli v2" >&2
+    log "         terrain-class: as terrain" >&2
+    log "         dem: Python 3.12 + the pmtiles CLI + awscli v2" >&2
 fi
 
 # The basemap wants ~100 GB: 28 GB of OSM source plus planetiler's working
@@ -281,13 +282,13 @@ for dir in "${reused[@]}"; do
 done
 held_gb=0
 if [ "${#held_dirs[@]}" -gt 0 ]; then
-    echo "==> measuring what earlier ${target} runs left in ${held_dirs[*]}"
+    log "==> measuring what earlier ${target} runs left in ${held_dirs[*]}"
     held_gb=$(du -s -BG "${held_dirs[@]}" | awk '{s += $1} END {print s + 0}')
 fi
 have_gb=$(( ${free_gb:-0} + held_gb ))
-echo "==> disk: ${free_gb} GB free + ${held_gb} GB from earlier ${target} runs = ${have_gb} GB, need ~${need_gb} GB"
+log "==> disk: ${free_gb} GB free + ${held_gb} GB from earlier ${target} runs = ${have_gb} GB, need ~${need_gb} GB"
 if [ "$have_gb" -lt "$need_gb" ]; then
-    echo "error: ${have_gb} GB available (${free_gb} GB free + ${held_gb} GB from earlier ${target} runs), need ~${need_gb} GB for the ${target} build" >&2
+    log "error: ${have_gb} GB available (${free_gb} GB free + ${held_gb} GB from earlier ${target} runs), need ~${need_gb} GB for the ${target} build" >&2
     exit 1
 fi
 
@@ -297,17 +298,17 @@ fi
 stage "checking the R2 credentials" \
     "R2 refused the credentials or could not be reached: a value was mistyped or pasted with a space, the token was revoked, or it lacks access to ${R2_BUCKET}. Nothing has been built or uploaded." \
     "Paste the three exports from step 5 again, carefully, then run the same command again. If it fails the same way, make a new R2 token (Object Read & Write on ${R2_BUCKET})."
-echo "==> checking the R2 credentials"
+log "==> checking the R2 credentials"
 aws s3api list-objects-v2 --bucket "$R2_BUCKET" --max-keys 1 \
     --endpoint-url "https://${CLOUDFLARE_ACCOUNT_ID}.r2.cloudflarestorage.com" \
     --region auto >/dev/null
-echo "    ok    R2 accepts the credentials for ${R2_BUCKET}"
+log "    ok    R2 accepts the credentials for ${R2_BUCKET}"
 
 if [ "$target" = "basemap" ]; then
     stage "building the basemap" \
         "planetiler stopped; the lines above say why. Nothing has been uploaded." \
         "Send Claude the box and the 20 lines above it."
-    echo "==> building ${PMTILES_NAME} for ${PLANETILER_BOUNDS}"
+    log "==> building ${PMTILES_NAME} for ${PLANETILER_BOUNDS}"
     # Give planetiler most of the box's RAM; it is the whole reason for renting
     # one.
     total_mb=$(free -m | awk '/^Mem:/ {print $2}')
@@ -320,7 +321,7 @@ if [ "$target" = "basemap" ]; then
     # Not upload.sh: that skips an archive whose byte count matches the bucket,
     # and a rebuild landing on an identical size is possible. One object, one
     # unconditional copy.
-    echo "==> uploading to R2"
+    log "==> uploading to R2"
     aws s3 cp "${DIST_DIR}/${PMTILES_NAME}" "s3://${R2_BUCKET}/${PMTILES_NAME}" \
         --endpoint-url "https://${CLOUDFLARE_ACCOUNT_ID}.r2.cloudflarestorage.com" \
         --region auto \
@@ -333,7 +334,7 @@ elif [ "$target" = "terrain" ]; then
     stage "building the terrain tileset" \
         "The terrain build stopped; the box above says where." \
         "Follow the box above."
-    echo "==> building the terrain tileset for ${TERRAIN_BBOX} (fill: ${TERRAIN_MAPTERHORN_BBOX:-none}, dem ${TERRAIN_DEM_VERSION})"
+    log "==> building the terrain tileset for ${TERRAIN_BBOX} (fill: ${TERRAIN_MAPTERHORN_BBOX:-none}, dem ${TERRAIN_DEM_VERSION})"
     ./scripts/build-terrain.sh
 
     # Swiss heights kept, or no upload (SNOW-1505). 300 tiles of the live grid
@@ -348,14 +349,14 @@ elif [ "$target" = "terrain" ]; then
     stage "comparing Swiss heights with the live grid" \
         "Either the live grid could not be read for the comparison (a network failure), or the rebuild moved the Swiss heights further than a rounding or a newer survey would. Nothing has been uploaded." \
         "If the lines above start with error: and give percentages, send them to Claude. If they show a download error, run the same command again: finished build stages are skipped."
-    echo "==> comparing Swiss heights with live terrain/${TERRAIN_REFERENCE_VERSION}"
+    log "==> comparing Swiss heights with live terrain/${TERRAIN_REFERENCE_VERSION}"
     python3 scripts/compare_grids.py sample \
         --url "${TILES_ORIGIN}/${TERRAIN_DIR}/${TERRAIN_REFERENCE_VERSION}" \
         --out "$reference" \
         --seed "$TERRAIN_COMPARE_SEED" \
         --interior 200 --border 100
     python3 scripts/compare_grids.py "$reference" "${DIST_DIR}/${TERRAIN_DIR}" || {
-        echo "error: the Swiss heights moved beyond tolerance; nothing was uploaded" >&2
+        log "error: the Swiss heights moved beyond tolerance; nothing was uploaded" >&2
         exit 1
     }
 
@@ -372,20 +373,20 @@ elif [ "$target" = "terrain" ]; then
     # A swissALTI3D-only build (TERRAIN_MAPTERHORN_BBOX empty) has no fill, no
     # seams and no verify-gap.json; it checks only the no-data points.
     if [ -z "${TERRAIN_MAPTERHORN_BBOX:-}" ]; then
-        echo "==> checking no-data points in ${DIST_DIR}/${TERRAIN_DIR} (swissALTI3D only: no seams)"
-        python3 scripts/terrain_grid.py places --url "${DIST_DIR}/${TERRAIN_DIR}"
+        log "==> checking no-data points in ${DIST_DIR}/${TERRAIN_DIR} (swissALTI3D only: no seams)"
+        python3 scripts/terrain_grid.py places --url "${DIST_DIR}/${TERRAIN_DIR}" | stamp_lines
     else
         if [ ! -s "$gap_file" ]; then
-            echo "error: ${gap_file} is missing; build-terrain.sh writes it after the cut" >&2
+            log "error: ${gap_file} is missing; build-terrain.sh writes it after the cut" >&2
             exit 1
         fi
-        echo "==> checking no-data points and summits in ${DIST_DIR}/${TERRAIN_DIR}"
+        log "==> checking no-data points and summits in ${DIST_DIR}/${TERRAIN_DIR}"
         python3 scripts/terrain_grid.py places \
-            --url "${DIST_DIR}/${TERRAIN_DIR}" --expect "$gap_file"
+            --url "${DIST_DIR}/${TERRAIN_DIR}" --expect "$gap_file" | stamp_lines
         while IFS= read -r name; do
-            echo "==> checking the seam profile ${name}"
+            log "==> checking the seam profile ${name}"
             python3 scripts/terrain_grid.py profile "$name" \
-                --url "${DIST_DIR}/${TERRAIN_DIR}" --expect "$gap_file"
+                --url "${DIST_DIR}/${TERRAIN_DIR}" --expect "$gap_file" | stamp_lines
         done < <(python3 -c '
 import json
 for p in json.load(open("scripts/verify_points.json"))["profiles"]:
@@ -401,7 +402,7 @@ for p in json.load(open("scripts/verify_points.json"))["profiles"]:
     stage "uploading the terrain tiles" \
         "The upload to R2 stopped part way: usually the network. grid.json goes last, so the new version is not usable until a full upload finishes, and the live version is untouched." \
         "Run the same command again: finished build stages are skipped, and the upload sends only what is missing."
-    echo "==> uploading to R2"
+    log "==> uploading to R2"
     ./scripts/upload.sh
 
     artefact="${TERRAIN_DIR}/ ($(find "${DIST_DIR}/${TERRAIN_DIR}" -name '*.s16' | wc -l | tr -d ' ') tiles)"
@@ -409,7 +410,7 @@ elif [ "$target" = "dem" ]; then
     stage "building the 3-D elevation copy" \
         "The elevation copy build stopped; the lines above say why. Nothing has been uploaded." \
         "Run the same command again; if it stops here twice, send Claude the box and the 20 lines above it."
-    echo "==> building the 3-D elevation copy ${dem_version}"
+    log "==> building the 3-D elevation copy ${dem_version}"
     ./scripts/build-dem.sh "$dem_version"
 
     stage "uploading the 3-D elevation copy" \
@@ -417,7 +418,7 @@ elif [ "$target" = "dem" ]; then
         "Run the same command again."
     # upload.sh publishes only what is staged — here dist/dem/ — and never
     # replaces a version that is already in the bucket.
-    echo "==> uploading to R2"
+    log "==> uploading to R2"
     ./scripts/upload.sh
 
     artefact="${DEM_DIR}/${dem_version}/ ($(du -sh "${DIST_DIR}/${DEM_DIR}/${dem_version}" | cut -f1))"
@@ -435,7 +436,7 @@ else
         "The terrain build stopped; the box above says where." \
         "Follow the box above."
     if [ ! -s "${TERRAIN_WORK_DIR}/grid.raw" ]; then
-        echo "==> no ${TERRAIN_WORK_DIR}/grid.raw — building the elevation grid first"
+        log "==> no ${TERRAIN_WORK_DIR}/grid.raw — building the elevation grid first"
         ./scripts/build-terrain.sh
     fi
     # Unconditional: an earlier `terrain` run on this same box may have left
@@ -445,7 +446,7 @@ else
     stage "building the terrain-class tileset" \
         "The class build stopped; the lines above say why. Nothing has been uploaded." \
         "Run the same command again. If it stops here twice, send Claude the box and the 20 lines above it."
-    echo "==> building the terrain-class tileset"
+    log "==> building the terrain-class tileset"
     ./scripts/build-terrain-class.sh
 
     stage "uploading the class tiles" \
@@ -455,7 +456,7 @@ else
     # use — until it is deployed they answer 404, since the bucket keys carry
     # no version — but nothing breaks either way round, so the deploy and this
     # upload can happen in either order. verify.sh needs both.
-    echo "==> uploading to R2"
+    log "==> uploading to R2"
     ./scripts/upload.sh
 
     artefact="${TERRAIN_CLASS_DIR}/ ($(find "${DIST_DIR}/${TERRAIN_CLASS_DIR}" -name '*.png' | wc -l | tr -d ' ') tiles)"

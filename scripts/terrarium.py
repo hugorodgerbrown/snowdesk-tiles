@@ -45,6 +45,7 @@ from typing import Any
 import numpy as np
 from numpy.typing import NDArray
 from PIL import Image
+from stamp import log
 from terrain_grid import HEIGHT_MIN_M, HEIGHT_NODATA_M
 
 #: The zoom the terrain build reads. See the module docstring for why.
@@ -465,7 +466,7 @@ def main(argv: list[str] | None = None) -> int:
         bbox = tuple(args.bbox) if args.bbox else None
         tiles = tiles_for_area(area, args.zoom, bbox)
         if not tiles:
-            print("error: the area and the box share no tiles", file=sys.stderr)
+            log("error: the area and the box share no tiles")
             return 1
         if args.print_bbox:
             print(*tiles_bbox(tiles, args.zoom))
@@ -480,10 +481,9 @@ def main(argv: list[str] | None = None) -> int:
         zoom=args.zoom,
         block_tiles=args.block_tiles,
     )
-    print(
+    log(
         f"==> {summary['tiles_decoded']} tiles decoded into {summary['blocks']} "
         f"blocks ({summary['tiles_missing']} absent) -> {summary['vrt']}",
-        file=sys.stderr,
     )
     return 0
 

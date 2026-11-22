@@ -54,7 +54,6 @@ import math
 import re
 import shutil
 import subprocess
-import sys
 import tarfile
 import urllib.error
 import urllib.request
@@ -63,6 +62,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+from stamp import log
 from terrain_grid import HEIGHT_NODATA_M
 from terrarium import (
     ZOOM,
@@ -735,9 +735,8 @@ def coverage_features(
                     raise
                 # Not on the mirror (yet): read it from Mapterhorn's own server,
                 # from the start, stopping once the member has been read.
-                print(
+                log(
                     f"    {source}: not on the mirror; reading {origin}",
-                    file=sys.stderr,
                 )
                 data = tar_member_streamed(origin, COVERAGE_MEMBER, opener)
             part.write_bytes(data)
@@ -860,7 +859,7 @@ def main(argv: list[str] | None = None) -> int:
         print("\n".join(probe(args.origin)))
     elif args.command == "coverage":
         if shutil.which("ogr2ogr") is None:
-            print("error: ogr2ogr not found — install gdal-bin", file=sys.stderr)
+            log("error: ogr2ogr not found — install gdal-bin")
             return 1
         features, met = coverage_features(
             attribution_entries(_read(args.attribution)),
@@ -870,9 +869,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         document = {"type": "FeatureCollection", "features": features}
         args.out.write_text(json.dumps(document), encoding="utf-8")
-        print(
-            f"==> coverage from {len(met)} sources: {', '.join(met)}", file=sys.stderr
-        )
+        log(f"==> coverage from {len(met)} sources: {', '.join(met)}")
     elif args.command == "select":
         clip, credits = select(
             _read(args.coverage),
@@ -884,9 +881,7 @@ def main(argv: list[str] | None = None) -> int:
         args.clip.write_text(json.dumps(clip), encoding="utf-8")
         args.credits.write_text(json.dumps(credits, indent=2) + "\n", encoding="utf-8")
         names = ", ".join(c["id"] for c in credits["credits"])
-        print(
-            f"==> {len(credits['credits'])} national models: {names}", file=sys.stderr
-        )
+        log(f"==> {len(credits['credits'])} national models: {names}")
     elif args.command == "manifest":
         area_bbox = mapterhorn_area_bbox(_read(args.area), _bbox(args.bbox))
         merged = merge_manifest(
@@ -902,7 +897,7 @@ def main(argv: list[str] | None = None) -> int:
     else:
         reason = check_dem_zoom(_read(args.dem_manifest))
         if reason:
-            print(f"error: {reason}", file=sys.stderr)
+            log(f"error: {reason}")
             return 1
     return 0
 

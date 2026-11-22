@@ -28,6 +28,11 @@
 # Without op, or with USE_1PASSWORD=0, this returns quietly and the calling
 # script reports the missing variable itself, as it always has.
 
+# Its messages are stamped with log from log.sh, found beside this file, so it
+# works whether or not config.sh was sourced first.
+# shellcheck source=scripts/log.sh
+source "$(dirname "${BASH_SOURCE[0]}")/log.sh"
+
 : "${OP_ENV_FILE:=.env.1password}"
 
 # op_reexec SCRIPT NAME... -- ARG...
@@ -47,11 +52,11 @@ op_reexec() {
     [ -z "${SNOWDESK_OP_RUN:-}" ] || return 0
     [ "${USE_1PASSWORD:-1}" != "0" ] || return 0
     if ! command -v op >/dev/null 2>&1; then
-        echo "note: ${missing[*]} not set, and the 1Password CLI (op) is not installed" >&2
+        log "note: ${missing[*]} not set, and the 1Password CLI (op) is not installed" >&2
         return 0
     fi
     if [ ! -f "$OP_ENV_FILE" ]; then
-        echo "note: ${missing[*]} not set, and there is no ${OP_ENV_FILE} to resolve them from" >&2
+        log "note: ${missing[*]} not set, and there is no ${OP_ENV_FILE} to resolve them from" >&2
         return 0
     fi
 
@@ -65,7 +70,7 @@ op_reexec() {
     pattern="^($(IFS='|'; echo "${missing[*]}"))="
     grep -E "$pattern" "$OP_ENV_FILE" >"$refs" || true
 
-    echo "==> resolving ${missing[*]} from 1Password (${OP_ENV_FILE})" >&2
+    log "==> resolving ${missing[*]} from 1Password (${OP_ENV_FILE})" >&2
     SNOWDESK_OP_RUN=1 exec op run --env-file="$refs" -- \
         bash -c 'rm -f "$0"; exec "$@"' "$refs" "$script" "$@"
 }

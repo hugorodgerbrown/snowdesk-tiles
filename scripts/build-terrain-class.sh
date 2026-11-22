@@ -51,7 +51,7 @@ source scripts/failure.sh
 python=${PYTHON:-python3}
 
 if ! "$python" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 12) else 1)' 2>/dev/null; then
-    echo "error: ${python} is not a usable Python 3.12+ interpreter" >&2
+    log "error: ${python} is not a usable Python 3.12+ interpreter" >&2
     exit 1
 fi
 if ! "$python" -c 'import numpy' 2>/dev/null; then
@@ -64,7 +64,7 @@ EOF
     exit 1
 fi
 command -v gdalwarp >/dev/null 2>&1 || {
-    echo "error: gdalwarp not found — install GDAL (apt install gdal-bin, brew install gdal)" >&2
+    log "error: gdalwarp not found — install GDAL (apt install gdal-bin, brew install gdal)" >&2
     exit 1
 }
 
@@ -84,7 +84,7 @@ mkdir -p "$work"
 if command -v flock >/dev/null 2>&1; then
     exec 9>"${work}/.build.lock"
     flock -n 9 || {
-        echo "error: another terrain-class build holds ${work}/.build.lock — wait for it, or stop it" >&2
+        log "error: another terrain-class build holds ${work}/.build.lock — wait for it, or stop it" >&2
         exit 1
     }
 fi
@@ -104,8 +104,8 @@ mkdir -p "$work" "$out"
 
 free_gb=$(df -Pk "$work" | awk 'NR==2 {print int($4 / 1048576)}')
 if [ "${free_gb:-0}" -lt 125 ]; then
-    echo "warning: ${free_gb} GB free; the Alps-wide grid needs ~125 GB of" >&2
-    echo "         class planes, Mercator rasters and tiles (Switzerland alone ~25 GB)" >&2
+    log "warning: ${free_gb} GB free; the Alps-wide grid needs ~125 GB of" >&2
+    log "         class planes, Mercator rasters and tiles (Switzerland alone ~25 GB)" >&2
 fi
 
 # The grid's extent and shape, from the same call build-terrain.sh made, so the
@@ -122,9 +122,9 @@ stage "classifying slope, aspect and curvature" \
     "Run the same command again: finished stages are skipped. If it stops here twice, send Claude the box and the 20 lines above it."
 
 if [ -s "$vrt" ] && [ "$force" != "1" ]; then
-    echo "==> ${vrt} exists — skipping classification; FORCE_TERRAIN_CLASS=1 to redo"
+    log "==> ${vrt} exists — skipping classification; FORCE_TERRAIN_CLASS=1 to redo"
 else
-    echo "==> classifying the ${cols}x${rows} grid at the 10 m window"
+    log "==> classifying the ${cols}x${rows} grid at the 10 m window"
     "$python" scripts/classify_terrain.py \
         --raster "$raw" \
         --west "$te_w" --north "$te_n" \
@@ -141,7 +141,7 @@ zooms=$(seq "$TERRAIN_CLASS_MIN_ZOOM" "$TERRAIN_CLASS_MAX_ZOOM")
 for zoom in $zooms; do
     name="mercator-z${zoom}.raw"
     if [ -s "${work}/${name}" ] && [ "$force" != "1" ]; then
-        echo "==> z${zoom}: ${name} exists — skipping warp"
+        log "==> z${zoom}: ${name} exists — skipping warp"
         continue
     fi
 
@@ -150,7 +150,7 @@ for zoom in $zooms; do
     read -r m_w m_s m_e m_n width height _ _ tiles_x tiles_y \
         < <("$python" scripts/terrain_class.py mercator-extent \
             --manifest "$manifest" --zoom "$zoom")
-    echo "==> z${zoom}: warping to ${width}x${height} px (${tiles_x}x${tiles_y} tiles)"
+    log "==> z${zoom}: warping to ${width}x${height} px (${tiles_x}x${tiles_y} tiles)"
 
     # -r near, and nothing else. Every byte is a code — a height byte, a class
     # — and averaging two classes produces a third that describes neither
@@ -201,18 +201,18 @@ for zoom in $zooms; do
         hdr="${part%.raw}.hdr"
         [ -f "$hdr" ] || hdr="${part}.hdr"
         if [ -f "$hdr" ] && ! grep -qi '^interleave *= *bip' "$hdr"; then
-            echo "error: ${hdr} is not pixel-interleaved; the cutter assumes RGBA per pixel" >&2
+            log "error: ${hdr} is not pixel-interleaved; the cutter assumes RGBA per pixel" >&2
             exit 1
         fi
         expected=$((width * s_height * 4))
         actual=$(wc -c <"$part" | tr -d ' ')
         if [ "$actual" != "$expected" ]; then
-            echo "error: z${zoom} strip ${strip} is ${actual} bytes, expected ${expected}" >&2
+            log "error: z${zoom} strip ${strip} is ${actual} bytes, expected ${expected}" >&2
             exit 1
         fi
         cat "$part" >>"${tmp}/${name}"
         rm -f "$part" "$hdr"
-        echo "    z${zoom}: strip ${strip} (${s_height} rows) warped"
+        log "    z${zoom}: strip ${strip} (${s_height} rows) warped"
     done < <("$python" scripts/terrain_class.py mercator-strips \
         --manifest "$manifest" --zoom "$zoom" \
         --strip-tiles "${TERRAIN_CLASS_STRIP_TILES:-8}")
@@ -238,10 +238,10 @@ stage "cutting the class tiles" \
     --zooms $zooms
 
 echo
-echo "==> ${out} ready: $(du -sh "$out" | cut -f1)"
-echo "    deploy the Worker first if it predates SNOW-987: cd worker && npx wrangler deploy"
-echo "    publish with: ./scripts/upload.sh"
-echo "    then:         ./scripts/verify.sh"
+log "==> ${out} ready: $(du -sh "$out" | cut -f1)"
+log "    deploy the Worker first if it predates SNOW-987: cd worker && npx wrangler deploy"
+log "    publish with: ./scripts/upload.sh"
+log "    then:         ./scripts/verify.sh"
 echo
-echo "    ${work} holds ~$(du -sh "$work" 2>/dev/null | cut -f1) of intermediates"
-echo "    and can be deleted once the tiles are published."
+log "    ${work} holds ~$(du -sh "$work" 2>/dev/null | cut -f1) of intermediates"
+log "    and can be deleted once the tiles are published."

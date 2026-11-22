@@ -40,7 +40,37 @@ op_reexec scripts/upload.sh CLOUDFLARE_ACCOUNT_ID AWS_ACCESS_KEY_ID AWS_SECRET_A
 : "${AWS_DEFAULT_REGION:=auto}"
 export AWS_DEFAULT_REGION
 
-s3() { aws s3 "$@" --endpoint-url "$R2_ENDPOINT" --no-progress; }
+# R2 answers a burst of writes with an occasional 503 ("Reduce your concurrent
+# request rate"). The SNOW-1505 upload of 121,802 tiles met three, and a sync
+# that loses even one object exits non-zero, so the run stopped before
+# grid.json. Adaptive retries back off and slow the client down on a 503, and
+# ten attempts ride out a burst; the CLI's default is three.
+: "${AWS_RETRY_MODE:=adaptive}"
+: "${AWS_MAX_ATTEMPTS:=10}"
+export AWS_RETRY_MODE AWS_MAX_ATTEMPTS
+
+# Every line the CLI prints ("upload: …", errors) is stamped, so a pasted log
+# says when each object went up.
+s3() { aws s3 "$@" --endpoint-url "$R2_ENDPOINT" --no-progress 2>&1 | stamp_lines; }
+
+# A sync that still loses objects after the CLI's own retries is run again:
+# a rerun compares with the bucket and sends only what is missing, so three
+# passes cost little more than one. Only for sync; a single cp has no
+# "missing part" to resume.
+s3_sync() {
+    local attempt
+    for attempt in 1 2 3; do
+        if s3 sync "$@"; then
+            return 0
+        fi
+        if [ "$attempt" -lt 3 ]; then
+            log "    sync pass ${attempt} of 3 missed some objects — sending what is missing in 30 s" >&2
+            sleep 30
+        fi
+    done
+    log "error: three sync passes each missed objects; the bucket is refusing writes" >&2
+    return 1
+}
 
 # The archive may legitimately not be here: vm-build.sh builds it on a rented
 # box and uploads it from there, so the local tree never holds it. Requiring it
@@ -82,7 +112,7 @@ mirrored() {
         published=$((published + 1))
         return 0
     fi
-    echo "    none staged — leaving the published ${1} as they are"
+    log "    none staged — leaving the published ${1} as they are"
     return 1
 }
 
@@ -93,50 +123,50 @@ mirrored() {
 # from the build box, and a full one.
 published=0
 
-echo "==> glyphs"
+log "==> glyphs"
 if mirrored fonts; then
-    s3 sync "${DIST_DIR}/fonts" "s3://${R2_BUCKET}/fonts" \
+    s3_sync "${DIST_DIR}/fonts" "s3://${R2_BUCKET}/fonts" \
         --content-type application/x-protobuf \
         --cache-control "$IMMUTABLE_CACHE"
 fi
 
-echo "==> sprite atlases and indexes"
+log "==> sprite atlases and indexes"
 if mirrored sprites; then
-    s3 sync "${DIST_DIR}/sprites" "s3://${R2_BUCKET}/sprites" \
+    s3_sync "${DIST_DIR}/sprites" "s3://${R2_BUCKET}/sprites" \
         --exclude '*' --include '*.png' \
         --content-type image/png \
         --cache-control "$IMMUTABLE_CACHE"
-    s3 sync "${DIST_DIR}/sprites" "s3://${R2_BUCKET}/sprites" \
+    s3_sync "${DIST_DIR}/sprites" "s3://${R2_BUCKET}/sprites" \
         --exclude '*' --include '*.json' \
         --content-type application/json \
         --cache-control "$IMMUTABLE_CACHE"
 fi
 
-echo "==> natural earth raster tiles"
+log "==> natural earth raster tiles"
 if mirrored natural_earth; then
     # Two passes because --content-type applies to the whole sync. The PNGs
     # stay published beside their WebP twins: the style that names them has a
     # one-hour TTL, and offline areas pinned before the switch hold PNG URLs.
-    s3 sync "${DIST_DIR}/natural_earth" "s3://${R2_BUCKET}/natural_earth" \
+    s3_sync "${DIST_DIR}/natural_earth" "s3://${R2_BUCKET}/natural_earth" \
         --exclude '*' --include '*.png' \
         --content-type image/png \
         --cache-control "$IMMUTABLE_CACHE"
-    s3 sync "${DIST_DIR}/natural_earth" "s3://${R2_BUCKET}/natural_earth" \
+    s3_sync "${DIST_DIR}/natural_earth" "s3://${R2_BUCKET}/natural_earth" \
         --exclude '*' --include '*.webp' \
         --content-type image/webp \
         --cache-control "$IMMUTABLE_CACHE"
 fi
 
-echo "==> vector tiles (${PMTILES_NAME}, multipart)"
+log "==> vector tiles (${PMTILES_NAME}, multipart)"
 # `cp` always re-uploads, and the archive is several GB. It changes only when
 # the extract is rebuilt, whereas the style changes whenever the origin or tile
 # path moves — so a style-only publish would otherwise push the whole archive
 # again for nothing. Sizes were compared above; FORCE_ARCHIVE=1 overrides (a
 # rebuild landing on an identical byte count is possible, if unlikely).
 if [ -z "$local_size" ]; then
-    echo "    not built locally, already in the bucket (${remote_size} bytes) — skipping"
+    log "    not built locally, already in the bucket (${remote_size} bytes) — skipping"
 elif [ "${FORCE_ARCHIVE:-0}" != "1" ] && [ "$local_size" = "$remote_size" ]; then
-    echo "    unchanged (${local_size} bytes) — skipping; FORCE_ARCHIVE=1 to override"
+    log "    unchanged (${local_size} bytes) — skipping; FORCE_ARCHIVE=1 to override"
 else
     published=$((published + 1))
     s3 cp "${DIST_DIR}/${PMTILES_NAME}" "s3://${R2_BUCKET}/${PMTILES_NAME}" \
@@ -160,7 +190,7 @@ version_prefix() {
 terrain_prefix=$(version_prefix "$TERRAIN_DIR" "$TERRAIN_VERSION" v1)
 class_prefix=$(version_prefix "$TERRAIN_CLASS_DIR" "$TERRAIN_CLASS_VERSION" v1 v2)
 
-echo "==> terrain elevation tiles"
+log "==> terrain elevation tiles"
 # Tens of thousands of small objects rather than one large one, so `sync` is
 # doing real work here: a rerun after an interrupted upload transfers only what
 # is missing. Class A operations are billed per thousand writes, which at this
@@ -171,26 +201,26 @@ if mirrored "$TERRAIN_DIR"; then
     # Content-Type, a short TTL, and to land last.
     # verify-gap.json (SNOW-1505) is the build's input to verify.sh, not a
     # published object; the Worker would never serve it.
-    echo "    to ${terrain_prefix}/"
-    s3 sync "${DIST_DIR}/${TERRAIN_DIR}" "s3://${R2_BUCKET}/${terrain_prefix}" \
+    log "    to ${terrain_prefix}/"
+    s3_sync "${DIST_DIR}/${TERRAIN_DIR}" "s3://${R2_BUCKET}/${terrain_prefix}" \
         --exclude 'grid.json' \
         --exclude 'verify-gap.json' \
         --content-type application/octet-stream \
         --cache-control "$IMMUTABLE_CACHE"
 
     if [ -f "${DIST_DIR}/${TERRAIN_DIR}/grid.json" ]; then
-        echo "    grid definition (published last, after its tiles)"
+        log "    grid definition (published last, after its tiles)"
         s3 cp "${DIST_DIR}/${TERRAIN_DIR}/grid.json" \
             "s3://${R2_BUCKET}/${terrain_prefix}/grid.json" \
             --content-type application/json \
             --cache-control "$STYLE_CACHE"
     else
-        echo "    warning: no grid.json — SNOW-917 reads the grid definition" >&2
-        echo "             from it, so the tileset is unusable without one" >&2
+        log "    warning: no grid.json — SNOW-917 reads the grid definition" >&2
+        log "             from it, so the tileset is unusable without one" >&2
     fi
 fi
 
-echo "==> terrain-class tiles"
+log "==> terrain-class tiles"
 # Same shape as the elevation tiles: tens of thousands of small immutable
 # objects synced, and the descriptor copied last because it is the pointer the
 # browser reads the contract and the URL template from.
@@ -204,30 +234,30 @@ echo "==> terrain-class tiles"
 # a build of every zoom, is refused rather than published.
 if mirrored "$TERRAIN_CLASS_DIR"; then
     if [ ! -f "${DIST_DIR}/${TERRAIN_CLASS_DIR}/tiles.json" ]; then
-        echo "error: ${DIST_DIR}/${TERRAIN_CLASS_DIR} has no tiles.json — a partial" >&2
-        echo "       build, or one that did not finish; not publishing it" >&2
+        log "error: ${DIST_DIR}/${TERRAIN_CLASS_DIR} has no tiles.json — a partial" >&2
+        log "       build, or one that did not finish; not publishing it" >&2
         exit 1
     fi
     # --exclude also keeps the live tiles.json out of the deletion.
-    echo "    to ${class_prefix}/"
+    log "    to ${class_prefix}/"
     # A legacy (unversioned) publish syncs the set's root, which also holds
     # every later version's prefix: exclude them, or --delete would wipe them.
     # Legacy zoom directories are numbers, so v* matches only versions.
-    s3 sync "${DIST_DIR}/${TERRAIN_CLASS_DIR}" "s3://${R2_BUCKET}/${class_prefix}" \
+    s3_sync "${DIST_DIR}/${TERRAIN_CLASS_DIR}" "s3://${R2_BUCKET}/${class_prefix}" \
         --delete \
         --exclude 'tiles.json' \
         --exclude 'v*' \
         --content-type image/png \
         --cache-control "$IMMUTABLE_CACHE"
 
-    echo "    descriptor (published last, after its tiles)"
+    log "    descriptor (published last, after its tiles)"
     s3 cp "${DIST_DIR}/${TERRAIN_CLASS_DIR}/tiles.json" \
         "s3://${R2_BUCKET}/${class_prefix}/tiles.json" \
         --content-type application/json \
         --cache-control "$STYLE_CACHE"
 fi
 
-echo "==> 3-D elevation copy"
+log "==> 3-D elevation copy"
 # One directory per version, each a handful of multi-GB archives plus
 # manifest.json. Versions sit side by side in the bucket and the Worker reads
 # the one it is asked for, so this never deletes anything: retiring an old
@@ -245,18 +275,18 @@ if mirrored "$DEM_DIR"; then
     for dir in "${DIST_DIR}/${DEM_DIR}"/*/; do
         version=$(basename "$dir")
         if [ ! -f "${dir}manifest.json" ] || [ ! -f "${dir}planet.pmtiles" ]; then
-            echo "error: ${dir} has no manifest.json or planet.pmtiles — an unfinished" >&2
-            echo "       build-dem.sh; not publishing it" >&2
+            log "error: ${dir} has no manifest.json or planet.pmtiles — an unfinished" >&2
+            log "       build-dem.sh; not publishing it" >&2
             exit 1
         fi
         if aws s3api head-object --endpoint-url "$R2_ENDPOINT" --bucket "$R2_BUCKET" \
             --key "${DEM_DIR}/${version}/manifest.json" >/dev/null 2>&1 \
             && [ "${FORCE_DEM_PUBLISH:-0}" != "1" ]; then
-            echo "    ${version}: already published — skipping; a refresh is a new version"
+            log "    ${version}: already published — skipping; a refresh is a new version"
             continue
         fi
-        echo "    ${version}"
-        s3 sync "$dir" "s3://${R2_BUCKET}/${DEM_DIR}/${version}" \
+        log "    ${version}"
+        s3_sync "$dir" "s3://${R2_BUCKET}/${DEM_DIR}/${version}" \
             --exclude '*' --include '*.pmtiles' \
             --content-type application/octet-stream \
             --cache-control "$IMMUTABLE_CACHE"
@@ -268,7 +298,7 @@ if mirrored "$DEM_DIR"; then
     done
 fi
 
-echo "==> style (published last)"
+log "==> style (published last)"
 # Same rule as the mirror directories, for the same reason: absent means "not
 # rebuilt", never "delete it". build-terrain.sh stages only dist/terrain/ (and
 # build-terrain-class.sh only dist/terrain-class/), so a
@@ -280,7 +310,7 @@ if [ -f "${DIST_DIR}/styles/liberty" ]; then
         --content-type application/json \
         --cache-control "$STYLE_CACHE"
 else
-    echo "    none staged — leaving the published style as it is"
+    log "    none staged — leaving the published style as it is"
 fi
 
 if [ "$published" -eq 0 ]; then
@@ -295,5 +325,5 @@ EOF
     exit 1
 fi
 
-echo "==> published to ${TILES_ORIGIN}"
-echo "    verify with: ./scripts/verify.sh"
+log "==> published to ${TILES_ORIGIN}"
+log "    verify with: ./scripts/verify.sh"

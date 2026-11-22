@@ -56,7 +56,6 @@ import json
 import math
 import shutil
 import subprocess
-import sys
 import urllib.request
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -65,6 +64,7 @@ from typing import Any
 import fetch_swissalti3d
 import numpy as np
 from numpy.typing import NDArray
+from stamp import log
 from terrain_grid import CELL_SIZE_M, HEIGHT_NODATA_M, lonlat_to_grid
 from terrarium import ZOOM, decode_tiles, tile_path, tiles_for_box
 
@@ -452,7 +452,7 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--work, --dem-url and --clip are required to run the check")
 
     if shutil.which("gdalwarp") is None:
-        print("error: gdalwarp not found — install GDAL", file=sys.stderr)
+        log("error: gdalwarp not found — install GDAL")
         return 1
     failed = 0
     kinds: set[str] = set()
@@ -462,23 +462,22 @@ def main(argv: list[str] | None = None) -> int:
                 crossing, args.work, args.dem_url, args.clip, args.gsd
             )
         except (RuntimeError, OSError, subprocess.CalledProcessError) as error:
-            print(f"  FAIL  datum: {crossing['name']}: {error}", flush=True)
+            log(f"  FAIL  datum: {crossing['name']}: {error}")
             failed += 1
             kinds.add("error")
             continue
         status = "ok  " if result.ok else "FAIL"
-        print(f"  {status}  datum: {crossing['name']}: {result.reason}", flush=True)
+        log(f"  {status}  datum: {crossing['name']}: {result.reason}")
         if not result.ok:
             failed += 1
             kinds.add("step" if result.swiss_mean_m is not None else "no-look")
     if failed:
-        print(
+        log(
             f"error: {failed} crossing(s) failed the datum check — the build stops "
             "before any bulk download, and nothing was uploaded",
-            file=sys.stderr,
         )
         for kind in sorted(kinds):
-            print(ADVICE[kind], file=sys.stderr)
+            log(ADVICE[kind])
         return 1
     return 0
 
