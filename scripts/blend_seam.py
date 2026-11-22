@@ -47,6 +47,7 @@ from pathlib import Path
 
 import numpy as np
 from numpy.typing import NDArray
+from stamp import STAMP_FORMAT, log
 from terrain_grid import CELL_SIZE_M, NODATA, lonlat_extent, snap_extent
 
 logger = logging.getLogger(__name__)
@@ -185,14 +186,14 @@ def _cmd_blend(args: argparse.Namespace) -> int:
     raw = np.memmap(args.raw, dtype="<i2", mode="r+", shape=(args.rows, args.cols))
     changed = blend_window(raw, swiss, fill, args.xoff, args.yoff)
     raw.flush()
-    print(f"==> {changed} cells along swissALTI3D's edge blended into the fill")
+    log(f"==> {changed} cells along swissALTI3D's edge blended into the fill")
     return 0
 
 
 def main(argv: list[str] | None = None) -> int:
     """Run the command-line interface."""
     logging.basicConfig(
-        level=logging.INFO, format="%(asctime)s %(message)s", datefmt="%H:%M:%S"
+        level=logging.INFO, format="%(asctime)s %(message)s", datefmt=STAMP_FORMAT
     )
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = parser.add_subparsers(dest="command", required=True)
@@ -214,7 +215,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         result: int = args.func(args)
     except (OSError, ValueError) as error:
-        print(f"error: {error}", file=sys.stderr)
+        log(f"error: {error}")
         return 1
     return result
 

@@ -44,10 +44,10 @@ import argparse
 import json
 import mmap
 import struct
-import sys
 from pathlib import Path
 from typing import Any
 
+from stamp import log
 from terrain_grid import (
     CELL_SIZE_M,
     NODATA,
@@ -195,7 +195,7 @@ def cut(raster: Raster, out: Path) -> dict[str, Any]:
                 ]
             )
             if written % 1000 == 0:
-                print(f"    {written} tiles", end="\r", file=sys.stderr)
+                log(f"    {written} tiles", end="\r")
 
     if not written:
         raise RuntimeError(
@@ -318,9 +318,8 @@ def main(argv: list[str] | None = None) -> int:
     raster = Raster(Path(args.raster), args.west, args.north, args.cols, args.rows)
     out = Path(args.out)
     try:
-        print(
+        log(
             f"==> cutting {raster.tiles_x}x{raster.tiles_y} tiles into {out}",
-            file=sys.stderr,
         )
         coverage = cut(raster, out)
     finally:
@@ -334,11 +333,10 @@ def main(argv: list[str] | None = None) -> int:
     document = grid_json(coverage, args.origin, args.version, manifest)
     (out / "grid.json").write_text(json.dumps(document, indent=2) + "\n", "utf-8")
 
-    print(
+    log(
         f"==> {coverage['tile_count']} tiles, "
         f"x {coverage['tile_x'][0]}-{coverage['tile_x'][1]}, "
         f"y {coverage['tile_y'][0]}-{coverage['tile_y'][1]}",
-        file=sys.stderr,
     )
     return 0
 

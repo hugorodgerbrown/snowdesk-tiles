@@ -41,11 +41,12 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import sys
 import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Any
+
+from stamp import log
 
 STAC_ORIGIN = os.environ.get("STAC_ORIGIN", "https://data.geo.admin.ch")
 COLLECTION = os.environ.get("SWISSALTI3D_COLLECTION", "ch.swisstopo.swissalti3d")
@@ -96,7 +97,7 @@ def items(bbox: tuple[float, float, float, float]) -> list[dict[str, Any]]:
             ),
             None,
         )
-        print(f"    {len(found)} items", end="\r", file=sys.stderr)
+        log(f"    {len(found)} items", end="\r")
 
     raise RuntimeError(f"STAC paging exceeded {MAX_PAGES} pages")
 
@@ -139,9 +140,8 @@ def select(found: list[dict[str, Any]], gsd: float) -> list[dict[str, Any]]:
         item = newest[square]
         href = asset_href(item, gsd)
         if href is None:
-            print(
+            log(
                 f"warning: {item['id']} has no {gsd} m GeoTIFF — skipped",
-                file=sys.stderr,
             )
             continue
         chosen.append(item | {"_href": href})
@@ -192,15 +192,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--manifest", required=True, help="write the manifest here")
     args = parser.parse_args(argv)
 
-    print(f"==> querying {COLLECTION} over {args.bbox}", file=sys.stderr)
+    log(f"==> querying {COLLECTION} over {args.bbox}")
     found = items(tuple(args.bbox))
     if not found:
-        print("error: no swissALTI3D items in that box", file=sys.stderr)
+        log("error: no swissALTI3D items in that box")
         return 1
 
     chosen = select(found, args.gsd)
     if not chosen:
-        print(f"error: no {args.gsd} m assets on {len(found)} items", file=sys.stderr)
+        log(f"error: no {args.gsd} m assets on {len(found)} items")
         return 1
 
     # Reported separately because they mean different things. Superseded items
@@ -223,10 +223,9 @@ def main(argv: list[str] | None = None) -> int:
         notes.append(f"{superseded} superseded by a later survey")
     if unusable:
         notes.append(f"{unusable} with no {args.gsd} m asset")
-    print(
+    log(
         f"==> {summary['count']} squares, survey years {summary['survey_years']}"
         + (f" ({', '.join(notes)})" if notes else ""),
-        file=sys.stderr,
     )
     return 0
 

@@ -43,13 +43,13 @@ EOF
     exit 1
 fi
 
-echo "==> mirroring sprites and glyphs from ${UPSTREAM_ORIGIN}"
+log "==> mirroring sprites and glyphs from ${UPSTREAM_ORIGIN}"
 "$python" scripts/mirror_assets.py --dist "$DIST_DIR"
 
-echo "==> encoding WebP twins of the relief raster"
+log "==> encoding WebP twins of the relief raster"
 "$python" scripts/transcode_raster.py --dist "$DIST_DIR"
 
-echo "==> rewriting style for ${TILES_ORIGIN} (${PMTILES_NAME})"
+log "==> rewriting style for ${TILES_ORIGIN} (${PMTILES_NAME})"
 mkdir -p "${DIST_DIR}/styles"
 # Write to a temp file first: rewrite_style.py exits non-zero when an upstream
 # reference survives the rewrite, and a shell redirect would have already
@@ -63,9 +63,9 @@ mkdir -p "${DIST_DIR}/styles"
 mv "${DIST_DIR}/styles/liberty.tmp" "${DIST_DIR}/styles/liberty"
 
 if [ ! -f "${DIST_DIR}/${PMTILES_NAME}" ]; then
-    echo "warning: ${DIST_DIR}/${PMTILES_NAME} is missing." >&2
-    echo "         Run ./scripts/build-extract.sh before uploading." >&2
+    log "warning: ${DIST_DIR}/${PMTILES_NAME} is missing." >&2
+    log "         Run ./scripts/build-extract.sh before uploading." >&2
 fi
 
-echo "==> dist tree ready:"
+log "==> dist tree ready:"
 du -sh "$DIST_DIR"/* 2>/dev/null || true

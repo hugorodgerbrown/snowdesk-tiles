@@ -17,6 +17,11 @@
 # prints the box, and each outer one adds a single line naming its own stage.
 # They share a marker file through SNOWDESK_FAILURE_MARK for that.
 
+# Its messages are stamped with log from log.sh, found beside this file, so it
+# works whether or not config.sh was sourced first.
+# shellcheck source=scripts/log.sh
+source "$(dirname "${BASH_SOURCE[0]}")/log.sh"
+
 FAILURE_SCRIPT=$(basename "$0")
 FAILURE_STAGE="starting up"
 FAILURE_MEANS="The script stopped before its first stage, while checking its setup."
@@ -48,12 +53,12 @@ _failure_on_exit() {
     local status=$1
     if [ "$status" -ne 0 ]; then
         if [ -s "$SNOWDESK_FAILURE_MARK" ]; then
-            echo "    (${FAILURE_SCRIPT} stopped too, while ${FAILURE_STAGE}; the box above says why)" >&2
+            log "    (${FAILURE_SCRIPT} stopped too, while ${FAILURE_STAGE}; the box above says why)" >&2
         else
             {
                 echo
                 echo "=========================================================================="
-                echo " STOPPED: ${FAILURE_SCRIPT}, while ${FAILURE_STAGE}"
+                log " STOPPED: ${FAILURE_SCRIPT}, while ${FAILURE_STAGE}"
                 if [ -n "$FAILURE_CMD" ]; then
                     echo "   Failed: ${FAILURE_CMD}"
                     echo "           (line ${FAILURE_LINE}, exit status ${status})"

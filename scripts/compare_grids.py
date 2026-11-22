@@ -53,6 +53,7 @@ from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
+from stamp import log
 from terrain_grid import NODATA, SKIRT_CELLS, STORED_CELLS, TILE_BYTES, TILE_CELLS
 
 CELLS = STORED_CELLS * STORED_CELLS
@@ -287,12 +288,11 @@ def main(argv: list[str] | None = None) -> int:
         try:
             summary = sample(args.url, args.out, args.seed, args.interior, args.border)
         except (ValueError, urllib.error.URLError) as error:
-            print(f"error: {error}", file=sys.stderr)
+            log(f"error: {error}")
             return 1
-        print(
+        log(
             f"==> {summary['interior']} interior and {summary['border']} border "
             f"tiles from {summary['fetched']} fetched",
-            file=sys.stderr,
         )
         return 0
 
@@ -303,15 +303,15 @@ def main(argv: list[str] | None = None) -> int:
     try:
         count, tally = compare(args.reference, args.candidate)
     except HeightChangedError as error:
-        print(f"error: {error}", file=sys.stderr)
+        log(f"error: {error}")
         return 1
-    print(f"==> {count} tiles, {tally.summary()}", file=sys.stderr)
+    log(f"==> {count} tiles, {tally.summary()}")
     problems = tally.failures()
     for problem in problems:
-        print(f"error: {problem}", file=sys.stderr)
+        log(f"error: {problem}")
     if problems:
         return 1
-    print("==> Swiss heights within tolerance of the reference", file=sys.stderr)
+    log("==> Swiss heights within tolerance of the reference")
     return 0
 
 

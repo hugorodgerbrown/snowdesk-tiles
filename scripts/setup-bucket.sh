@@ -98,11 +98,11 @@ run_idempotent() {
         return 0
     fi
     if printf '%s' "$output" | grep -qi "$expected"; then
-        echo "    ${label} already done — continuing"
+        log "    ${label} already done — continuing"
         return 0
     fi
     printf '%s\n' "$output" >&2
-    echo "error: ${label} failed" >&2
+    log "error: ${label} failed" >&2
 
     # A 403/10000 here is a permissions problem, not a bad token: the same token
     # authenticates fine for object operations. R2 tokens come in four levels and
@@ -130,7 +130,7 @@ EOF
     exit 1
 }
 
-echo "==> creating bucket ${R2_BUCKET} (location hint ${R2_LOCATION_HINT})"
+log "==> creating bucket ${R2_BUCKET} (location hint ${R2_LOCATION_HINT})"
 # shellcheck disable=SC2086 - $wrangler is an intentional multi-word command
 run_idempotent "bucket create" "already exists" \
     $wrangler r2 bucket create "$R2_BUCKET" --location "$R2_LOCATION_HINT"
@@ -156,7 +156,7 @@ EOF
     exit 0
 fi
 
-echo "==> attaching custom domain ${domain}"
+log "==> attaching custom domain ${domain}"
 # shellcheck disable=SC2086 - $wrangler is an intentional multi-word command
 run_idempotent "domain attach" "already \(exists\|attached\|associated\)" \
     $wrangler r2 bucket domain add "$R2_BUCKET" \

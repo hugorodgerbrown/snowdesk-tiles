@@ -43,11 +43,11 @@ import json
 import mmap
 import shutil
 import struct
-import sys
 import zlib
 from pathlib import Path
 from typing import Any
 
+from stamp import log
 from terrain_class import (
     ALPHA,
     MAX_ZOOM,
@@ -292,7 +292,7 @@ def cut(raster: MercatorRaster, out: Path) -> dict[str, Any]:
                 ]
             )
             if written % 500 == 0:
-                print(f"    z{extent.zoom}: {written} tiles", end="\r", file=sys.stderr)
+                log(f"    z{extent.zoom}: {written} tiles", end="\r")
 
     if not written:
         raise RuntimeError(
@@ -364,16 +364,14 @@ def main(argv: list[str] | None = None) -> int:
         # it, and the Worker would serve the old classes instead of a 204.
         shutil.rmtree(out / str(zoom), ignore_errors=True)
         try:
-            print(
+            log(
                 f"==> z{zoom}: cutting {extent.tiles_x}x{extent.tiles_y} tiles",
-                file=sys.stderr,
             )
             level = cut(raster, out)
         finally:
             raster.close()
-        print(
+        log(
             f"==> z{zoom}: {level['tile_count']} tiles, {level['bytes']:,} bytes",
-            file=sys.stderr,
         )
         levels.append(level)
 
@@ -392,15 +390,13 @@ def main(argv: list[str] | None = None) -> int:
         descriptor_path.write_text(json.dumps(document, indent=2) + "\n", "utf-8")
     else:
         descriptor_path.unlink(missing_ok=True)
-        print(
+        log(
             f"==> partial build (z{sorted(args.zooms)}): no tiles.json written, "
             "so upload.sh will not publish it",
-            file=sys.stderr,
         )
-    print(
+    log(
         f"==> {document['tile_count']} tiles, {document['bytes']:,} bytes "
         f"({document['bytes'] / 1e9:.2f} GB, the unit R2 bills in)",
-        file=sys.stderr,
     )
     return 0
 
